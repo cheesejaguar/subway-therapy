@@ -336,11 +336,10 @@ export default function Wall({
       <div
         className="relative subway-tiles"
         style={{
-          transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})`,
+          transform: `translate3d(${position.x}px, ${position.y}px, 0) scale(${zoom})`,
           transformOrigin: "0 0",
           width: wallWidth,
           height: wallHeight,
-          transition: isDragging ? "none" : "transform 0.1s ease-out",
         }}
       >
         {isLoading && (
@@ -383,9 +382,10 @@ export default function Wall({
         )}
       </div>
 
-      {/* Zoom controls */}
+      {/* Zoom controls - positioned above safe area */}
       <div
-        className="absolute bottom-4 right-4 flex flex-col gap-2 z-20"
+        className="absolute right-4 flex flex-col gap-2 z-20"
+        style={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))" }}
         role="group"
         aria-label="Zoom controls"
       >
@@ -416,7 +416,10 @@ export default function Wall({
       </div>
 
       {/* Current zoom level indicator */}
-      <div className="absolute bottom-4 left-4 bg-white/80 px-3 py-1 rounded-lg text-sm text-gray-600 shadow">
+      <div
+        className="absolute left-4 bg-white/80 px-3 py-1 rounded-lg text-sm text-gray-600 shadow"
+        style={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))" }}
+      >
         {Math.round(zoom * 100)}%
       </div>
 

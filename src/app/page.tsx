@@ -173,7 +173,7 @@ export default function Home() {
   };
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden">
+    <div className="relative w-screen overflow-hidden" style={{ height: "100dvh" }}>
       {/* Main wall */}
       <Wall
         notes={notes}
@@ -191,7 +191,8 @@ export default function Home() {
       {!isPlacingNote && (
         <button
           onClick={() => setShowCreator(true)}
-          className="fixed bottom-8 left-1/2 -translate-x-1/2 px-8 py-4 bg-[var(--ui-primary)] text-white font-semibold rounded-full shadow-lg hover:bg-[var(--ui-primary-hover)] transition-all hover:scale-105 focus:ring-4 focus:ring-[var(--ui-primary)]/50 touch-target z-30"
+          className="fixed left-1/2 -translate-x-1/2 px-8 py-4 bg-[var(--ui-primary)] text-white font-semibold rounded-full shadow-lg hover:bg-[var(--ui-primary-hover)] transition-all hover:scale-105 focus:ring-4 focus:ring-[var(--ui-primary)]/50 touch-target z-30"
+          style={{ bottom: "calc(2rem + env(safe-area-inset-bottom, 0px))" }}
           aria-label="Add your note"
         >
           Add Your Note

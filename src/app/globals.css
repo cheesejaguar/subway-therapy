@@ -46,8 +46,15 @@ html, body {
   padding: 0;
   overflow: hidden;
   width: 100%;
-  height: 100%;
+  height: 100dvh; /* Use dynamic viewport height for mobile */
   touch-action: none;
+}
+
+/* iOS safe area support */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
 }
 
 body {
@@ -63,6 +70,10 @@ body {
     linear-gradient(90deg, var(--tile-grout) 2px, transparent 2px);
   background-size: var(--tile-size) var(--tile-size);
   background-position: -1px -1px;
+  /* GPU acceleration for smooth panning */
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 /* Sticky note base styles */
@@ -76,15 +87,25 @@ body {
     -1px -1px 2px rgba(255, 255, 255, 0.3) inset;
   transform-origin: center center;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  /* GPU acceleration */
+  will-change: transform;
+  backface-visibility: hidden;
+  contain: layout style paint;
 }
 
-.sticky-note:hover {
-  transform: scale(1.05);
-  box-shadow:
-    4px 4px 10px rgba(0, 0, 0, 0.2),
-    -1px -1px 2px rgba(255, 255, 255, 0.3) inset;
-  z-index: 10;
+/* Only enable hover effects on devices with hover capability */
+@media (hover: hover) {
+  .sticky-note {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .sticky-note:hover {
+    transform: scale(1.05);
+    box-shadow:
+      4px 4px 10px rgba(0, 0, 0, 0.2),
+      -1px -1px 2px rgba(255, 255, 255, 0.3) inset;
+    z-index: 10;
+  }
 }
 
 .sticky-note::before {
