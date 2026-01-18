@@ -8,6 +8,11 @@ import { StickyNote, NoteColor, ViewportBounds } from "@/lib/types";
 
 const ONBOARDING_STORAGE_KEY = "subway_therapy_onboarded";
 
+interface PendingNote {
+  imageData: string;
+  color: NoteColor;
+}
+
 export default function Home() {
   const [notes, setNotes] = useState<StickyNote[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -19,6 +24,9 @@ export default function Home() {
   const [submissionMessage, setSubmissionMessage] = useState<string | null>(
     null
   );
+  const [pendingNote, setPendingNote] = useState<PendingNote | null>(null);
+  const [isPlacingNote, setIsPlacingNote] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Check onboarding status
   useEffect(() => {
@@ -105,12 +113,31 @@ export default function Home() {
     }
   };
 
-  const handleSubmitNote = async (imageData: string, color: NoteColor) => {
+  const handlePreparePlace = (imageData: string, color: NoteColor) => {
+    setPendingNote({ imageData, color });
+    setShowCreator(false);
+    setIsPlacingNote(true);
+  };
+
+  const handleCancelPlacement = () => {
+    setPendingNote(null);
+    setIsPlacingNote(false);
+  };
+
+  const handlePlaceNote = async (x: number, y: number) => {
+    if (!pendingNote || isSubmitting) return;
+
+    setIsSubmitting(true);
     try {
       const response = await fetch("/api/notes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageData, color }),
+        body: JSON.stringify({
+          imageData: pendingNote.imageData,
+          color: pendingNote.color,
+          x,
+          y,
+        }),
       });
 
       const data = await response.json();
@@ -120,7 +147,8 @@ export default function Home() {
       }
 
       setSubmissionMessage(data.message);
-      setShowCreator(false);
+      setPendingNote(null);
+      setIsPlacingNote(false);
       setCanPost(false);
       setCantPostReason("Only one note per person per day!");
 
@@ -134,6 +162,8 @@ export default function Home() {
       alert(
         error instanceof Error ? error.message : "Failed to submit note"
       );
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -151,16 +181,32 @@ export default function Home() {
         onFlagNote={handleFlagNote}
         onViewportChange={handleViewportChange}
         isLoading={isLoading}
+        isPlacingNote={isPlacingNote}
+        pendingNote={pendingNote}
+        onPlaceNote={handlePlaceNote}
+        onCancelPlacement={handleCancelPlacement}
       />
 
-      {/* Add note button */}
-      <button
-        onClick={() => setShowCreator(true)}
-        className="fixed bottom-8 left-1/2 -translate-x-1/2 px-8 py-4 bg-[var(--ui-primary)] text-white font-semibold rounded-full shadow-lg hover:bg-[var(--ui-primary-hover)] transition-all hover:scale-105 focus:ring-4 focus:ring-[var(--ui-primary)]/50 touch-target z-30"
-        aria-label="Add your note"
-      >
-        Add Your Note
-      </button>
+      {/* Add note button - hide during placement */}
+      {!isPlacingNote && (
+        <button
+          onClick={() => setShowCreator(true)}
+          className="fixed bottom-8 left-1/2 -translate-x-1/2 px-8 py-4 bg-[var(--ui-primary)] text-white font-semibold rounded-full shadow-lg hover:bg-[var(--ui-primary-hover)] transition-all hover:scale-105 focus:ring-4 focus:ring-[var(--ui-primary)]/50 touch-target z-30"
+          aria-label="Add your note"
+        >
+          Add Your Note
+        </button>
+      )}
+
+      {/* Submitting overlay */}
+      {isSubmitting && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg px-6 py-4 shadow-lg flex items-center gap-3">
+            <div className="w-5 h-5 border-2 border-[var(--ui-primary)] border-t-transparent rounded-full animate-spin" />
+            <span className="text-gray-700">Posting your note...</span>
+          </div>
+        </div>
+      )}
 
       {/* Submission success message */}
       {submissionMessage && (
@@ -177,7 +223,7 @@ export default function Home() {
       <NoteCreator
         isOpen={showCreator}
         onClose={() => setShowCreator(false)}
-        onSubmit={handleSubmitNote}
+        onPreparePlace={handlePreparePlace}
         canPost={canPost}
         cantPostReason={cantPostReason}
         timeUntilNextPost={timeUntilNextPost}

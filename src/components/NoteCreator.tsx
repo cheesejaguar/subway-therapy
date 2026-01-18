@@ -6,7 +6,7 @@ import { NoteColor, InkColor, NOTE_COLORS, INK_COLORS } from "@/lib/types";
 interface NoteCreatorProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (imageData: string, color: NoteColor) => Promise<void>;
+  onPreparePlace: (imageData: string, color: NoteColor) => void;
   canPost: boolean;
   cantPostReason?: string;
   timeUntilNextPost?: string;
@@ -30,7 +30,7 @@ const INK_COLOR_OPTIONS: InkColor[] = ["black", "blue", "red", "green", "purple"
 export default function NoteCreator({
   isOpen,
   onClose,
-  onSubmit,
+  onPreparePlace,
   canPost,
   cantPostReason,
   timeUntilNextPost,
@@ -42,7 +42,6 @@ export default function NoteCreator({
   const [text, setText] = useState("");
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasDrawn, setHasDrawn] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [brushSize, setBrushSize] = useState(3);
 
   // Initialize canvas
@@ -196,26 +195,20 @@ export default function NoteCreator({
     return canvas.toDataURL("image/png");
   }, [noteColor, inkColor, text]);
 
-  const handleSubmit = async () => {
+  const handlePreparePlace = () => {
     if (!canPost) return;
 
-    setIsSubmitting(true);
+    let imageData: string;
 
-    try {
-      let imageData: string;
-
-      if (inputMode === "draw") {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        imageData = canvas.toDataURL("image/png");
-      } else {
-        imageData = generateImageFromText();
-      }
-
-      await onSubmit(imageData, noteColor);
-    } finally {
-      setIsSubmitting(false);
+    if (inputMode === "draw") {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      imageData = canvas.toDataURL("image/png");
+    } else {
+      imageData = generateImageFromText();
     }
+
+    onPreparePlace(imageData, noteColor);
   };
 
   const isValid =
@@ -426,18 +419,11 @@ export default function NoteCreator({
           </button>
           {canPost && (
             <button
-              onClick={handleSubmit}
-              disabled={!isValid || isSubmitting}
-              className="px-6 py-2 rounded-lg bg-[var(--ui-primary)] text-white font-medium hover:bg-[var(--ui-primary-hover)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              onClick={handlePreparePlace}
+              disabled={!isValid}
+              className="px-6 py-2 rounded-lg bg-[var(--ui-primary)] text-white font-medium hover:bg-[var(--ui-primary-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isSubmitting ? (
-                <>
-                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Posting...
-                </>
-              ) : (
-                "Post Note"
-              )}
+              Place on Wall
             </button>
           )}
         </div>

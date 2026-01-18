@@ -62,7 +62,13 @@ export default function StickyNoteComponent({
     >
       {/* Note content */}
       <div className="w-full h-full overflow-hidden relative">
-        {note.imageUrl && !imageError ? (
+        {note.moderationStatus === "pending" ? (
+          <div className="w-full h-full flex items-center justify-center p-4">
+            <span className="text-gray-600 text-sm text-center italic">
+              Pending moderation...
+            </span>
+          </div>
+        ) : note.imageUrl && !imageError ? (
           <img
             src={note.imageUrl}
             alt="User created note content"
@@ -70,7 +76,6 @@ export default function StickyNoteComponent({
             onError={() => setImageError(true)}
           />
         ) : (
-          // Placeholder for notes without images (sample notes)
           <div className="w-full h-full flex items-center justify-center text-gray-500 text-sm italic">
             {imageError ? "Image failed to load" : ""}
           </div>

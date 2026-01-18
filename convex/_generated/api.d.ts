@@ -1,71 +1,49 @@
 /* eslint-disable */
 /**
- * Generated API stub - will be replaced by Convex codegen
+ * Generated `api` utility.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run `npx convex dev`.
+ * @module
  */
 
-import type { FunctionReference } from "convex/server";
+import type * as notes from "../notes.js";
 
-export declare const api: {
-  notes: {
-    getApprovedNotes: FunctionReference<"query", "public", Record<string, never>, unknown[]>;
-    getNotesInViewport: FunctionReference<
-      "query",
-      "public",
-      { minX: number; maxX: number; minY: number; maxY: number },
-      unknown[]
-    >;
-    getNotesForModeration: FunctionReference<
-      "query",
-      "public",
-      { status?: string },
-      unknown[]
-    >;
-    getNoteByVisibleId: FunctionReference<
-      "query",
-      "public",
-      { visibleId: string },
-      unknown | null
-    >;
-    getStats: FunctionReference<
-      "query",
-      "public",
-      Record<string, never>,
-      { total: number; pending: number; approved: number; rejected: number; flagged: number }
-    >;
-    createNote: FunctionReference<
-      "mutation",
-      "public",
-      {
-        visibleId: string;
-        imageUrl: string;
-        color: string;
-        x: number;
-        y: number;
-        rotation: number;
-        createdAt: string;
-        moderationStatus: string;
-        flagCount: number;
-        sessionId: string;
-      },
-      string
-    >;
-    moderateNote: FunctionReference<
-      "mutation",
-      "public",
-      { visibleId: string; status: string },
-      { success: boolean } | null
-    >;
-    flagNote: FunctionReference<
-      "mutation",
-      "public",
-      { visibleId: string },
-      { flagCount: number } | null
-    >;
-    deleteNote: FunctionReference<
-      "mutation",
-      "public",
-      { visibleId: string },
-      { success: boolean; imageUrl?: string }
-    >;
-  };
-};
+import type {
+  ApiFromModules,
+  FilterApi,
+  FunctionReference,
+} from "convex/server";
+
+declare const fullApi: ApiFromModules<{
+  notes: typeof notes;
+}>;
+
+/**
+ * A utility for referencing Convex functions in your app's public API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = api.myModule.myFunction;
+ * ```
+ */
+export declare const api: FilterApi<
+  typeof fullApi,
+  FunctionReference<any, "public">
+>;
+
+/**
+ * A utility for referencing Convex functions in your app's internal API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = internal.myModule.myFunction;
+ * ```
+ */
+export declare const internal: FilterApi<
+  typeof fullApi,
+  FunctionReference<any, "internal">
+>;
+
+export declare const components: {};

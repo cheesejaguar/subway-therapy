@@ -6,8 +6,13 @@ import React, {
   useEffect,
   useCallback,
 } from "react";
-import { StickyNote, WALL_CONFIG, ViewportBounds } from "@/lib/types";
+import { StickyNote, NoteColor, WALL_CONFIG, ViewportBounds, NOTE_COLORS } from "@/lib/types";
 import StickyNoteComponent from "./StickyNote";
+
+interface PendingNote {
+  imageData: string;
+  color: NoteColor;
+}
 
 interface WallProps {
   notes: StickyNote[];
@@ -15,6 +20,10 @@ interface WallProps {
   onFlagNote?: (noteId: string) => void;
   onViewportChange?: (bounds: ViewportBounds) => void;
   isLoading?: boolean;
+  isPlacingNote?: boolean;
+  pendingNote?: PendingNote | null;
+  onPlaceNote?: (x: number, y: number) => void;
+  onCancelPlacement?: () => void;
 }
 
 const MIN_ZOOM = 0.25;
@@ -27,6 +36,10 @@ export default function Wall({
   onFlagNote,
   onViewportChange,
   isLoading = false,
+  isPlacingNote = false,
+  pendingNote = null,
+  onPlaceNote,
+  onCancelPlacement,
 }: WallProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -35,6 +48,7 @@ export default function Wall({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [touchDistance, setTouchDistance] = useState<number | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 1000, height: 1000 });
+  const [ghostPosition, setGhostPosition] = useState<{ x: number; y: number } | null>(null);
 
   const { gridWidth, gridHeight, noteWidth, noteHeight, noteSpacing } =
     WALL_CONFIG;
@@ -76,30 +90,64 @@ export default function Wall({
     return () => clearTimeout(timeoutId);
   }, [position, zoom, containerSize, getViewportBounds, onViewportChange]);
 
+  // Convert screen coordinates to wall coordinates
+  const screenToWall = useCallback(
+    (clientX: number, clientY: number): { x: number; y: number } => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return { x: 0, y: 0 };
+      const screenX = clientX - rect.left;
+      const screenY = clientY - rect.top;
+      // Convert to wall coordinates accounting for pan and zoom
+      const wallX = (screenX - position.x) / zoom;
+      const wallY = (screenY - position.y) / zoom;
+      return { x: wallX, y: wallY };
+    },
+    [position, zoom]
+  );
+
   // Mouse event handlers
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button !== 0) return; // Only left click
+      if (isPlacingNote) return; // Don't drag while placing
       setIsDragging(true);
       setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
     },
-    [position]
+    [position, isPlacingNote]
   );
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      if (isPlacingNote) {
+        // Update ghost position during placement mode
+        const wallPos = screenToWall(e.clientX, e.clientY);
+        // Center the note on the cursor
+        setGhostPosition({ x: wallPos.x - 75, y: wallPos.y - 75 });
+        return;
+      }
       if (!isDragging) return;
       setPosition({
         x: e.clientX - dragStart.x,
         y: e.clientY - dragStart.y,
       });
     },
-    [isDragging, dragStart]
+    [isDragging, dragStart, isPlacingNote, screenToWall]
   );
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
   }, []);
+
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (isPlacingNote && onPlaceNote && ghostPosition) {
+        e.preventDefault();
+        e.stopPropagation();
+        onPlaceNote(ghostPosition.x, ghostPosition.y);
+      }
+    },
+    [isPlacingNote, onPlaceNote, ghostPosition]
+  );
 
   // Touch event handlers
   const getTouchDistance = (touches: React.TouchList): number => {
@@ -111,6 +159,12 @@ export default function Wall({
 
   const handleTouchStart = useCallback(
     (e: React.TouchEvent) => {
+      if (isPlacingNote && e.touches.length === 1) {
+        // Update ghost position on touch
+        const wallPos = screenToWall(e.touches[0].clientX, e.touches[0].clientY);
+        setGhostPosition({ x: wallPos.x - 75, y: wallPos.y - 75 });
+        return;
+      }
       if (e.touches.length === 1) {
         setIsDragging(true);
         setDragStart({
@@ -121,12 +175,19 @@ export default function Wall({
         setTouchDistance(getTouchDistance(e.touches));
       }
     },
-    [position]
+    [position, isPlacingNote, screenToWall]
   );
 
   const handleTouchMove = useCallback(
     (e: React.TouchEvent) => {
       e.preventDefault();
+
+      if (isPlacingNote && e.touches.length === 1) {
+        // Update ghost position during drag
+        const wallPos = screenToWall(e.touches[0].clientX, e.touches[0].clientY);
+        setGhostPosition({ x: wallPos.x - 75, y: wallPos.y - 75 });
+        return;
+      }
 
       if (e.touches.length === 1 && isDragging) {
         setPosition({
@@ -144,13 +205,21 @@ export default function Wall({
         setTouchDistance(newDistance);
       }
     },
-    [isDragging, dragStart, touchDistance, zoom]
+    [isDragging, dragStart, touchDistance, zoom, isPlacingNote, screenToWall]
   );
 
-  const handleTouchEnd = useCallback(() => {
-    setIsDragging(false);
-    setTouchDistance(null);
-  }, []);
+  const handleTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      if (isPlacingNote && onPlaceNote && ghostPosition) {
+        e.preventDefault();
+        onPlaceNote(ghostPosition.x, ghostPosition.y);
+        return;
+      }
+      setIsDragging(false);
+      setTouchDistance(null);
+    },
+    [isPlacingNote, onPlaceNote, ghostPosition]
+  );
 
   // Wheel event for zoom
   const handleWheel = useCallback(
@@ -238,11 +307,14 @@ export default function Wall({
   return (
     <div
       ref={containerRef}
-      className="wall-container w-full h-full overflow-hidden cursor-grab active:cursor-grabbing focus:outline-none bg-[var(--tile-grout)]"
+      className={`wall-container w-full h-full overflow-hidden focus:outline-none bg-[var(--tile-grout)] ${
+        isPlacingNote ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"
+      }`}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onClick={handleClick}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -281,6 +353,25 @@ export default function Wall({
             onFlag={() => onFlagNote?.(note.id)}
           />
         ))}
+
+        {/* Ghost note during placement */}
+        {isPlacingNote && pendingNote && ghostPosition && (
+          <div
+            className="sticky-note opacity-70 pointer-events-none"
+            style={{
+              backgroundColor: NOTE_COLORS[pendingNote.color],
+              left: ghostPosition.x,
+              top: ghostPosition.y,
+              transform: "rotate(0deg)",
+            }}
+          >
+            <img
+              src={pendingNote.imageData}
+              alt="Note preview"
+              className="w-full h-full object-contain"
+            />
+          </div>
+        )}
       </div>
 
       {/* Zoom controls */}
@@ -319,6 +410,21 @@ export default function Wall({
       <div className="absolute bottom-4 left-4 bg-white/80 px-3 py-1 rounded-lg text-sm text-gray-600 shadow">
         {Math.round(zoom * 100)}%
       </div>
+
+      {/* Placement mode UI */}
+      {isPlacingNote && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white rounded-lg shadow-lg px-6 py-3 z-30 flex items-center gap-4">
+          <span className="text-gray-700 font-medium">
+            Click on the wall to place your note
+          </span>
+          <button
+            onClick={onCancelPlacement}
+            className="px-4 py-1 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </div>
   );
 }
