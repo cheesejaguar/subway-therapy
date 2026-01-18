@@ -49,25 +49,34 @@ export default function Wall({
   const [touchDistance, setTouchDistance] = useState<number | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 1000, height: 1000 });
   const [ghostPosition, setGhostPosition] = useState<{ x: number; y: number } | null>(null);
+  const [hasInitialized, setHasInitialized] = useState(false);
 
-  const { gridWidth, gridHeight, noteWidth, noteHeight, noteSpacing } =
-    WALL_CONFIG;
-  const wallWidth = gridWidth * (noteWidth + noteSpacing);
-  const wallHeight = gridHeight * (noteHeight + noteSpacing);
+  const { wallWidth, wallHeight } = WALL_CONFIG;
 
-  // Track container size
+  // Center of wall at 500 feet = 300,000 pixels
+  const WALL_CENTER_X = 300000;
+
+  // Track container size and center view on initial load
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         setContainerSize({ width: rect.width, height: rect.height });
+
+        // Center view on first load (x = 500 feet, y centered vertically)
+        if (!hasInitialized) {
+          const centerX = -WALL_CENTER_X + rect.width / 2;
+          const centerY = -wallHeight / 2 + rect.height / 2;
+          setPosition({ x: centerX, y: centerY });
+          setHasInitialized(true);
+        }
       }
     };
 
     updateSize();
     window.addEventListener("resize", updateSize);
     return () => window.removeEventListener("resize", updateSize);
-  }, []);
+  }, [hasInitialized, wallHeight]);
 
   // Calculate viewport bounds using state instead of ref
   const getViewportBounds = useCallback((): ViewportBounds => {

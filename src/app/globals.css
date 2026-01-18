@@ -6,7 +6,7 @@
   /* Subway tile colors */
   --tile-bg: #e8e4dc;
   --tile-grout: #c4c0b8;
-  --tile-size: 40px;
+  --tile-size: 219px; /* 4.375 inches at 50px/inch */
 
   /* Sticky note colors */
   --note-yellow: #fff740;

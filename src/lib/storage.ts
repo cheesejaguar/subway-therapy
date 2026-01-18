@@ -4,16 +4,11 @@ import { deleteNoteImage } from "./blob";
 // In-memory storage for development (replace with database in production)
 // This simulates what would be stored in Vercel Edge Config / KV
 const notesStore: Map<string, StickyNote> = new Map();
-const occupiedPositions: Set<string> = new Set();
 
 // Blocklist for automated moderation
 const BLOCKLIST_WORDS: string[] = [
   // Add blocked words here for production
 ];
-
-function positionKey(x: number, y: number): string {
-  return `${x},${y}`;
-}
 
 export function checkForBlockedContent(text: string): boolean {
   const lowerText = text.toLowerCase();
@@ -21,54 +16,20 @@ export function checkForBlockedContent(text: string): boolean {
 }
 
 export function findAvailablePosition(): { x: number; y: number } {
-  const { gridWidth, gridHeight, noteWidth, noteHeight, noteSpacing } = WALL_CONFIG;
-  const cellWidth = noteWidth + noteSpacing;
-  const cellHeight = noteHeight + noteSpacing;
+  const { wallWidth, wallHeight, noteWidth, noteHeight } = WALL_CONFIG;
 
-  // Try to find a random position first
-  for (let attempts = 0; attempts < 100; attempts++) {
-    const gridX = Math.floor(Math.random() * gridWidth);
-    const gridY = Math.floor(Math.random() * gridHeight);
-    const key = positionKey(gridX, gridY);
+  // Generate a random position within the wall bounds
+  // Center around the middle of the wall (500 feet = 300,000 px) with some variance
+  const centerX = 300000;
+  const variance = 50000; // ~83 feet of variance
 
-    if (!occupiedPositions.has(key)) {
-      return {
-        x: gridX * cellWidth + Math.random() * 20 - 10,
-        y: gridY * cellHeight + Math.random() * 20 - 10,
-      };
-    }
-  }
-
-  // If random fails, find first available
-  for (let gridY = 0; gridY < gridHeight; gridY++) {
-    for (let gridX = 0; gridX < gridWidth; gridX++) {
-      const key = positionKey(gridX, gridY);
-      if (!occupiedPositions.has(key)) {
-        return {
-          x: gridX * cellWidth + Math.random() * 20 - 10,
-          y: gridY * cellHeight + Math.random() * 20 - 10,
-        };
-      }
-    }
-  }
-
-  // Expand grid if needed
   return {
-    x: gridWidth * cellWidth + Math.random() * 20,
-    y: Math.random() * gridHeight * cellHeight,
+    x: centerX + (Math.random() * variance * 2 - variance),
+    y: Math.random() * (wallHeight - noteHeight),
   };
 }
 
 export async function createNote(note: StickyNote): Promise<StickyNote> {
-  const { noteWidth, noteHeight, noteSpacing } = WALL_CONFIG;
-  const cellWidth = noteWidth + noteSpacing;
-  const cellHeight = noteHeight + noteSpacing;
-
-  // Mark position as occupied
-  const gridX = Math.floor(note.x / cellWidth);
-  const gridY = Math.floor(note.y / cellHeight);
-  occupiedPositions.add(positionKey(gridX, gridY));
-
   notesStore.set(note.id, note);
   return note;
 }
@@ -92,14 +53,6 @@ export async function updateNote(
 export async function deleteNote(id: string): Promise<boolean> {
   const note = notesStore.get(id);
   if (!note) return false;
-
-  const { noteWidth, noteHeight, noteSpacing } = WALL_CONFIG;
-  const cellWidth = noteWidth + noteSpacing;
-  const cellHeight = noteHeight + noteSpacing;
-
-  const gridX = Math.floor(note.x / cellWidth);
-  const gridY = Math.floor(note.y / cellHeight);
-  occupiedPositions.delete(positionKey(gridX, gridY));
 
   // Delete the image from blob storage
   if (note.imageUrl) {
@@ -219,18 +172,20 @@ export async function getStats(): Promise<{
 }
 
 // Initialize with some sample notes for development
+// Positions centered around x = 300,000 (500 feet / middle of wall)
 export function initializeSampleNotes(): void {
   if (notesStore.size > 0) return;
 
+  const centerX = 300000;
   const sampleNotes: Partial<StickyNote>[] = [
-    { color: "yellow", x: 100, y: 100 },
-    { color: "pink", x: 300, y: 150 },
-    { color: "blue", x: 200, y: 350 },
-    { color: "green", x: 500, y: 200 },
-    { color: "orange", x: 450, y: 400 },
-    { color: "purple", x: 700, y: 300 },
-    { color: "coral", x: 150, y: 500 },
-    { color: "white", x: 600, y: 100 },
+    { color: "yellow", x: centerX - 400, y: 500 },
+    { color: "pink", x: centerX - 200, y: 800 },
+    { color: "blue", x: centerX, y: 1200 },
+    { color: "green", x: centerX + 200, y: 600 },
+    { color: "orange", x: centerX + 400, y: 1000 },
+    { color: "purple", x: centerX - 300, y: 1500 },
+    { color: "coral", x: centerX + 100, y: 2000 },
+    { color: "white", x: centerX + 300, y: 1800 },
   ];
 
   sampleNotes.forEach((sample, index) => {

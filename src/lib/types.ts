@@ -40,11 +40,13 @@ export interface ViewportBounds {
 }
 
 export interface WallConfig {
-  gridWidth: number;
-  gridHeight: number;
-  noteWidth: number;
-  noteHeight: number;
-  noteSpacing: number;
+  // Wall dimensions in pixels (at 50px per inch scale)
+  wallWidth: number;   // 1000 feet = 600,000px
+  wallHeight: number;  // 7 feet = 4,200px
+  noteWidth: number;   // 3" = 150px
+  noteHeight: number;  // 3" = 150px
+  tileSize: number;    // 4.375" = 219px
+  pixelsPerInch: number;
 }
 
 export const NOTE_COLORS: Record<NoteColor, string> = {
@@ -67,11 +69,12 @@ export const INK_COLORS: Record<InkColor, string> = {
 };
 
 export const WALL_CONFIG: WallConfig = {
-  gridWidth: 50,
-  gridHeight: 50,
-  noteWidth: 150,
-  noteHeight: 150,
-  noteSpacing: 20,
+  wallWidth: 600000,   // 1000 feet at 50px/inch
+  wallHeight: 4200,    // 7 feet at 50px/inch
+  noteWidth: 150,      // 3 inches at 50px/inch
+  noteHeight: 150,     // 3 inches at 50px/inch
+  tileSize: 219,       // 4.375 inches at 50px/inch
+  pixelsPerInch: 50,
 };
 
 // Cookie name for session tracking
