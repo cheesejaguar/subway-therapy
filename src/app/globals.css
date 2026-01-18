@@ -1,0 +1,190 @@
+@import "tailwindcss";
+
+:root {
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+
+  /* Subway tile colors */
+  --tile-bg: #e8e4dc;
+  --tile-grout: #c4c0b8;
+  --tile-size: 40px;
+
+  /* Sticky note colors */
+  --note-yellow: #fff740;
+  --note-pink: #ff7eb9;
+  --note-blue: #7afcff;
+  --note-green: #7aff92;
+  --note-orange: #ffb347;
+  --note-purple: #cb9df0;
+  --note-white: #ffffff;
+  --note-coral: #ff6b6b;
+
+  /* Ink colors */
+  --ink-black: #1a1a1a;
+  --ink-blue: #0066cc;
+  --ink-red: #cc0000;
+  --ink-green: #006600;
+  --ink-purple: #660099;
+
+  /* UI colors */
+  --ui-primary: #2d5a27;
+  --ui-primary-hover: #3d7a37;
+  --ui-danger: #dc2626;
+  --ui-warning: #f59e0b;
+  --ui-success: #10b981;
+}
+
+@theme inline {
+  --font-sans: var(--font-sans);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--tile-bg);
+}
+
+/* Subway tile pattern background */
+.subway-tiles {
+  background-color: var(--tile-bg);
+  background-image:
+    linear-gradient(var(--tile-grout) 2px, transparent 2px),
+    linear-gradient(90deg, var(--tile-grout) 2px, transparent 2px);
+  background-size: var(--tile-size) var(--tile-size);
+  background-position: -1px -1px;
+}
+
+/* Sticky note base styles */
+.sticky-note {
+  position: absolute;
+  width: 150px;
+  height: 150px;
+  padding: 10px;
+  box-shadow:
+    2px 2px 5px rgba(0, 0, 0, 0.15),
+    -1px -1px 2px rgba(255, 255, 255, 0.3) inset;
+  transform-origin: center center;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.sticky-note:hover {
+  transform: scale(1.05);
+  box-shadow:
+    4px 4px 10px rgba(0, 0, 0, 0.2),
+    -1px -1px 2px rgba(255, 255, 255, 0.3) inset;
+  z-index: 10;
+}
+
+.sticky-note::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 25px;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.4) 0%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  pointer-events: none;
+}
+
+/* Touch-friendly targets */
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 3px solid var(--ui-primary);
+  outline-offset: 2px;
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  :root {
+    --tile-bg: #ffffff;
+    --tile-grout: #000000;
+  }
+
+  .sticky-note {
+    border: 2px solid #000000;
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbar styling for the wall container */
+.wall-container::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.wall-container::-webkit-scrollbar-track {
+  background: var(--tile-grout);
+}
+
+.wall-container::-webkit-scrollbar-thumb {
+  background: var(--ui-primary);
+  border-radius: 6px;
+}
+
+/* Animation for new notes */
+@keyframes noteAppear {
+  from {
+    opacity: 0;
+    transform: scale(0.8) rotate(-5deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(var(--rotation, 0deg));
+  }
+}
+
+.note-appear {
+  animation: noteAppear 0.3s ease-out forwards;
+}
+
+/* Loading skeleton for notes */
+.note-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--tile-bg) 25%,
+    rgba(255, 255, 255, 0.5) 50%,
+    var(--tile-bg) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
