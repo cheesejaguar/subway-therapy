@@ -13,15 +13,85 @@ interface Stats {
 
 type FilterStatus = ModerationStatus | "all";
 
+const SESSION_KEY = "subway_admin_key";
+
 export default function AdminDashboard() {
   const [notes, setNotes] = useState<StickyNote[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [filter, setFilter] = useState<FilterStatus>("pending");
   const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Auth state
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+
+  // Check for existing session on mount
+  useEffect(() => {
+    const storedKey = sessionStorage.getItem(SESSION_KEY);
+    if (storedKey) {
+      setApiKey(storedKey);
+      setIsAuthenticated(true);
+    }
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setIsAuthenticating(true);
+
+    try {
+      // Test the key by making a request
+      const response = await fetch("/api/admin/notes?status=pending", {
+        headers: {
+          Authorization: `Bearer ${passwordInput}`,
+        },
+      });
+
+      if (response.status === 401) {
+        setAuthError("Invalid password");
+        return;
+      }
+
+      if (!response.ok) {
+        setAuthError("Authentication failed");
+        return;
+      }
+
+      // Success - store key and set authenticated
+      sessionStorage.setItem(SESSION_KEY, passwordInput);
+      setApiKey(passwordInput);
+      setIsAuthenticated(true);
+      setPasswordInput("");
+    } catch {
+      setAuthError("Connection error");
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem(SESSION_KEY);
+    setApiKey("");
+    setIsAuthenticated(false);
+    setNotes([]);
+    setStats(null);
+  };
+
+  const authHeaders = useCallback(() => {
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    };
+  }, [apiKey]);
+
   const fetchNotes = useCallback(async () => {
+    if (!isAuthenticated) return;
+
     setIsLoading(true);
     setError(null);
 
@@ -31,7 +101,15 @@ export default function AdminDashboard() {
         params.set("status", filter);
       }
 
-      const response = await fetch(`/api/admin/notes?${params}`);
+      const response = await fetch(`/api/admin/notes?${params}`, {
+        headers: authHeaders(),
+      });
+
+      if (response.status === 401) {
+        handleLogout();
+        return;
+      }
+
       if (!response.ok) {
         throw new Error("Failed to fetch notes");
       }
@@ -44,11 +122,13 @@ export default function AdminDashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [filter]);
+  }, [filter, isAuthenticated, authHeaders]);
 
   useEffect(() => {
-    fetchNotes();
-  }, [fetchNotes]);
+    if (isAuthenticated) {
+      fetchNotes();
+    }
+  }, [fetchNotes, isAuthenticated]);
 
   const handleModerate = async (
     noteId: string,
@@ -57,15 +137,19 @@ export default function AdminDashboard() {
     try {
       const response = await fetch("/api/admin/moderate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ noteId, action }),
       });
+
+      if (response.status === 401) {
+        handleLogout();
+        return;
+      }
 
       if (!response.ok) {
         throw new Error("Failed to moderate note");
       }
 
-      // Refresh notes
       await fetchNotes();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to moderate");
@@ -78,12 +162,17 @@ export default function AdminDashboard() {
     try {
       const response = await fetch("/api/admin/moderate", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           noteIds: Array.from(selectedNotes),
           action,
         }),
       });
+
+      if (response.status === 401) {
+        handleLogout();
+        return;
+      }
 
       if (!response.ok) {
         throw new Error("Failed to batch moderate notes");
@@ -116,14 +205,63 @@ export default function AdminDashboard() {
     }
   };
 
+  // Login screen
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="bg-white rounded-lg shadow-lg p-8 max-w-md w-full mx-4">
+          <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+            Moderation Dashboard
+          </h1>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label
+                htmlFor="password"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                Admin Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--ui-primary)] focus:border-transparent"
+                placeholder="Enter admin password"
+                required
+                autoFocus
+              />
+            </div>
+            {authError && (
+              <div className="text-red-600 text-sm">{authError}</div>
+            )}
+            <button
+              type="submit"
+              disabled={isAuthenticating || !passwordInput}
+              className="w-full py-2 px-4 bg-[var(--ui-primary)] text-white font-medium rounded-lg hover:bg-[var(--ui-primary-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isAuthenticating ? "Authenticating..." : "Login"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-100">
       {/* Header */}
       <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 py-6">
+        <div className="max-w-7xl mx-auto px-4 py-6 flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-900">
             Subway Therapy - Moderation Dashboard
           </h1>
+          <button
+            onClick={handleLogout}
+            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+          >
+            Logout
+          </button>
         </div>
       </header>
 
