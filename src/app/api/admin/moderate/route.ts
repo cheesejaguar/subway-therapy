@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { api } from "../../../../../convex/_generated/api";
+import { getConvexClient, isConvexConfigured } from "@/lib/convex";
 import { moderateNote, deleteNote, getNote } from "@/lib/storage";
+import { deleteNoteImage } from "@/lib/blob";
 
 // Simple admin authentication check
 function checkAdminAuth(request: NextRequest): boolean {
@@ -32,38 +35,58 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const note = await getNote(noteId);
-    if (!note) {
-      return NextResponse.json(
-        { error: "Note not found" },
-        { status: 404 }
-      );
+    if (isConvexConfigured()) {
+      const convex = getConvexClient();
+
+      switch (action) {
+        case "approve":
+        case "reject":
+          const result = await convex.mutation(api.notes.moderateNote, {
+            visibleId: noteId,
+            status: action === "approve" ? "approved" : "rejected",
+          });
+          if (!result) {
+            return NextResponse.json({ error: "Note not found" }, { status: 404 });
+          }
+          break;
+        case "delete":
+          const deleteResult = await convex.mutation(api.notes.deleteNote, {
+            visibleId: noteId,
+          });
+          if (!deleteResult.success) {
+            return NextResponse.json({ error: "Note not found" }, { status: 404 });
+          }
+          // Delete image from blob storage
+          if (deleteResult.imageUrl) {
+            await deleteNoteImage(deleteResult.imageUrl);
+          }
+          break;
+        default:
+          return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+      }
+    } else {
+      // Fall back to in-memory storage
+      const note = await getNote(noteId);
+      if (!note) {
+        return NextResponse.json({ error: "Note not found" }, { status: 404 });
+      }
+
+      switch (action) {
+        case "approve":
+          await moderateNote(noteId, "approved");
+          break;
+        case "reject":
+          await moderateNote(noteId, "rejected");
+          break;
+        case "delete":
+          await deleteNote(noteId);
+          break;
+        default:
+          return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+      }
     }
 
-    let result;
-
-    switch (action) {
-      case "approve":
-        result = await moderateNote(noteId, "approved");
-        break;
-      case "reject":
-        result = await moderateNote(noteId, "rejected");
-        break;
-      case "delete":
-        await deleteNote(noteId);
-        result = { deleted: true };
-        break;
-      default:
-        return NextResponse.json(
-          { error: "Invalid action" },
-          { status: 400 }
-        );
-    }
-
-    return NextResponse.json({
-      success: true,
-      result,
-    });
+    return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error moderating note:", error);
     return NextResponse.json(
@@ -97,18 +120,42 @@ export async function PUT(request: NextRequest) {
     const results = await Promise.all(
       noteIds.map(async (noteId) => {
         try {
-          switch (action) {
-            case "approve":
-              await moderateNote(noteId, "approved");
-              return { noteId, success: true };
-            case "reject":
-              await moderateNote(noteId, "rejected");
-              return { noteId, success: true };
-            case "delete":
-              await deleteNote(noteId);
-              return { noteId, success: true };
-            default:
-              return { noteId, success: false, error: "Invalid action" };
+          if (isConvexConfigured()) {
+            const convex = getConvexClient();
+
+            switch (action) {
+              case "approve":
+              case "reject":
+                await convex.mutation(api.notes.moderateNote, {
+                  visibleId: noteId,
+                  status: action === "approve" ? "approved" : "rejected",
+                });
+                return { noteId, success: true };
+              case "delete":
+                const deleteResult = await convex.mutation(api.notes.deleteNote, {
+                  visibleId: noteId,
+                });
+                if (deleteResult.imageUrl) {
+                  await deleteNoteImage(deleteResult.imageUrl);
+                }
+                return { noteId, success: deleteResult.success };
+              default:
+                return { noteId, success: false, error: "Invalid action" };
+            }
+          } else {
+            switch (action) {
+              case "approve":
+                await moderateNote(noteId, "approved");
+                return { noteId, success: true };
+              case "reject":
+                await moderateNote(noteId, "rejected");
+                return { noteId, success: true };
+              case "delete":
+                await deleteNote(noteId);
+                return { noteId, success: true };
+              default:
+                return { noteId, success: false, error: "Invalid action" };
+            }
           }
         } catch {
           return { noteId, success: false, error: "Failed to process" };
@@ -116,10 +163,7 @@ export async function PUT(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({
-      success: true,
-      results,
-    });
+    return NextResponse.json({ success: true, results });
   } catch (error) {
     console.error("Error batch moderating notes:", error);
     return NextResponse.json(

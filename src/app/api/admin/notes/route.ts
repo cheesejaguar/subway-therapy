@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { api } from "../../../../../convex/_generated/api";
+import { getConvexClient, isConvexConfigured } from "@/lib/convex";
 import { getNotesForModeration, getStats } from "@/lib/storage";
-import { ModerationStatus } from "@/lib/types";
+import { ModerationStatus, ConvexNote, mapConvexNote } from "@/lib/types";
 
 // Simple admin authentication check
-// In production, use proper authentication (e.g., NextAuth.js)
 function checkAdminAuth(request: NextRequest): boolean {
   const authHeader = request.headers.get("authorization");
   const adminKey = process.env.ADMIN_API_KEY || "dev-admin-key";
@@ -24,13 +25,25 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status") as ModerationStatus | null;
 
   try {
-    const notes = await getNotesForModeration(status || undefined);
-    const stats = await getStats();
+    if (isConvexConfigured()) {
+      const convex = getConvexClient();
 
-    return NextResponse.json({
-      notes,
-      stats,
-    });
+      const [convexNotes, stats] = await Promise.all([
+        convex.query(api.notes.getNotesForModeration, {
+          status: status || undefined,
+        }) as Promise<ConvexNote[]>,
+        convex.query(api.notes.getStats, {}),
+      ]);
+
+      const notes = convexNotes.map(mapConvexNote);
+
+      return NextResponse.json({ notes, stats });
+    } else {
+      // Fall back to in-memory storage
+      const notes = await getNotesForModeration(status || undefined);
+      const stats = await getStats();
+      return NextResponse.json({ notes, stats });
+    }
   } catch (error) {
     console.error("Error fetching notes for moderation:", error);
     return NextResponse.json(

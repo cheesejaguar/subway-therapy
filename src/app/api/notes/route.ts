@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
+import { api } from "../../../../convex/_generated/api";
+import { getConvexClient, isConvexConfigured } from "@/lib/convex";
 import {
-  createNote,
-  getNotesInViewport,
-  getAllNotes,
+  createNote as createNoteInMemory,
+  getNotesInViewport as getNotesInViewportInMemory,
+  getAllNotes as getAllNotesInMemory,
   findAvailablePosition,
   initializeSampleNotes,
 } from "@/lib/storage";
@@ -14,21 +16,13 @@ import {
   recordNoteSubmission,
 } from "@/lib/session";
 import { uploadNoteImage } from "@/lib/blob";
-import { StickyNote, CreateNoteRequest, ViewportBounds } from "@/lib/types";
+import { StickyNote, CreateNoteRequest, ViewportBounds, ConvexNote, mapConvexNote } from "@/lib/types";
 
-// Initialize sample notes on first request
+// Initialize sample notes on first request (for dev mode only)
 let initialized = false;
 
 export async function GET(request: NextRequest) {
-  // Initialize sample notes for development
-  if (!initialized) {
-    initializeSampleNotes();
-    initialized = true;
-  }
-
   const searchParams = request.nextUrl.searchParams;
-
-  // Check if requesting notes in a viewport
   const minX = searchParams.get("minX");
   const maxX = searchParams.get("maxX");
   const minY = searchParams.get("minY");
@@ -37,19 +31,41 @@ export async function GET(request: NextRequest) {
   try {
     let notes: StickyNote[];
 
-    if (minX && maxX && minY && maxY) {
-      const bounds: ViewportBounds = {
-        minX: parseFloat(minX),
-        maxX: parseFloat(maxX),
-        minY: parseFloat(minY),
-        maxY: parseFloat(maxY),
-      };
-      notes = await getNotesInViewport(bounds);
+    if (isConvexConfigured()) {
+      const convex = getConvexClient();
+
+      if (minX && maxX && minY && maxY) {
+        const convexNotes = await convex.query(api.notes.getNotesInViewport, {
+          minX: parseFloat(minX),
+          maxX: parseFloat(maxX),
+          minY: parseFloat(minY),
+          maxY: parseFloat(maxY),
+        }) as ConvexNote[];
+        notes = convexNotes.map(mapConvexNote);
+      } else {
+        const convexNotes = await convex.query(api.notes.getApprovedNotes, {}) as ConvexNote[];
+        notes = convexNotes.map(mapConvexNote);
+      }
     } else {
-      // Return all approved notes
-      notes = (await getAllNotes()).filter(
-        (note) => note.moderationStatus === "approved"
-      );
+      // Fall back to in-memory storage for development
+      if (!initialized) {
+        initializeSampleNotes();
+        initialized = true;
+      }
+
+      if (minX && maxX && minY && maxY) {
+        const bounds: ViewportBounds = {
+          minX: parseFloat(minX),
+          maxX: parseFloat(maxX),
+          minY: parseFloat(minY),
+          maxY: parseFloat(maxY),
+        };
+        notes = await getNotesInViewportInMemory(bounds);
+      } else {
+        notes = (await getAllNotesInMemory()).filter(
+          (note) => note.moderationStatus === "approved"
+        );
+      }
     }
 
     return NextResponse.json({ notes });
@@ -126,21 +142,39 @@ export async function POST(request: NextRequest) {
         ? { x: body.x, y: body.y }
         : findAvailablePosition();
 
-    // Create the note
-    const note: StickyNote = {
-      id: noteId,
-      imageUrl,
-      color: body.color,
-      x: position.x,
-      y: position.y,
-      rotation: Math.random() * 6 - 3, // -3 to 3 degrees
-      createdAt: new Date().toISOString(),
-      moderationStatus: "pending", // Notes start as pending
-      flagCount: 0,
-      sessionId,
-    };
+    const rotation = Math.random() * 6 - 3;
+    const createdAt = new Date().toISOString();
 
-    const createdNote = await createNote(note);
+    if (isConvexConfigured()) {
+      const convex = getConvexClient();
+      await convex.mutation(api.notes.createNote, {
+        visibleId: noteId,
+        imageUrl,
+        color: body.color,
+        x: position.x,
+        y: position.y,
+        rotation,
+        createdAt,
+        moderationStatus: "pending",
+        flagCount: 0,
+        sessionId,
+      });
+    } else {
+      // Fall back to in-memory storage
+      const note: StickyNote = {
+        id: noteId,
+        imageUrl,
+        color: body.color,
+        x: position.x,
+        y: position.y,
+        rotation,
+        createdAt,
+        moderationStatus: "pending",
+        flagCount: 0,
+        sessionId,
+      };
+      await createNoteInMemory(note);
+    }
 
     // Record that this session has posted
     await recordNoteSubmission();
@@ -151,14 +185,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       note: {
-        id: createdNote.id,
-        color: createdNote.color,
-        x: createdNote.x,
-        y: createdNote.y,
-        moderationStatus: createdNote.moderationStatus,
+        id: noteId,
+        color: body.color,
+        x: position.x,
+        y: position.y,
+        moderationStatus: "pending",
       },
-      message:
-        "Note received! It will appear on the wall after moderation.",
+      message: "Note received! It will appear on the wall after moderation.",
     });
   } catch (error) {
     console.error("Error creating note:", error);

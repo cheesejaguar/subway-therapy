@@ -77,3 +77,33 @@ export const WALL_CONFIG: WallConfig = {
 // Cookie name for session tracking
 export const SESSION_COOKIE_NAME = "subway_therapy_session";
 export const LAST_NOTE_COOKIE_NAME = "subway_therapy_last_note";
+
+// Convex note type (for type casting Convex responses)
+export interface ConvexNote {
+  visibleId: string;
+  imageUrl: string;
+  color: string;
+  x: number;
+  y: number;
+  rotation: number;
+  createdAt: string;
+  moderationStatus: string;
+  flagCount: number;
+  sessionId: string;
+}
+
+// Helper to convert Convex note to StickyNote
+export function mapConvexNote(note: ConvexNote): StickyNote {
+  return {
+    id: note.visibleId,
+    imageUrl: note.imageUrl,
+    color: note.color as NoteColor,
+    x: note.x,
+    y: note.y,
+    rotation: note.rotation,
+    createdAt: note.createdAt,
+    moderationStatus: note.moderationStatus as ModerationStatus,
+    flagCount: note.flagCount,
+    sessionId: note.sessionId,
+  };
+}
