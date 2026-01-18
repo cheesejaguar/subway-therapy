@@ -295,11 +295,15 @@ export default function Wall({
         case "0":
           e.preventDefault();
           setZoom(1);
-          setPosition({ x: 0, y: 0 });
+          // Reset to center of wall (500 feet)
+          setPosition({
+            x: -WALL_CENTER_X + containerSize.width / 2,
+            y: -wallHeight / 2 + containerSize.height / 2,
+          });
           break;
       }
     },
-    []
+    [containerSize, wallHeight]
   );
 
   // Filter notes to only render those in viewport (with padding)
@@ -406,7 +410,10 @@ export default function Wall({
         <button
           onClick={() => {
             setZoom(1);
-            setPosition({ x: 0, y: 0 });
+            // Reset to center of wall (500 feet)
+            const centerX = -WALL_CENTER_X + containerSize.width / 2;
+            const centerY = -wallHeight / 2 + containerSize.height / 2;
+            setPosition({ x: centerX, y: centerY });
           }}
           className="w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-sm font-medium text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target"
           aria-label="Reset view"
