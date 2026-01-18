@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
         }) as ConvexNote[];
         notes = convexNotes.map(mapConvexNote);
       } else {
-        const convexNotes = await convex.query(api.notes.getApprovedNotes, {}) as ConvexNote[];
+        const convexNotes = await convex.query(api.notes.getPublicNotes, {}) as ConvexNote[];
         notes = convexNotes.map(mapConvexNote);
       }
     } else {
@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
         notes = await getNotesInViewportInMemory(bounds);
       } else {
         notes = (await getAllNotesInMemory()).filter(
-          (note) => note.moderationStatus === "approved"
+          (note) => note.moderationStatus === "approved" || note.moderationStatus === "pending"
         );
       }
     }
@@ -191,7 +191,7 @@ export async function POST(request: NextRequest) {
         y: position.y,
         moderationStatus: "pending",
       },
-      message: "Note received! It will appear on the wall after moderation.",
+      message: "Note posted! It will be visible to others after moderation.",
     });
   } catch (error) {
     console.error("Error creating note:", error);

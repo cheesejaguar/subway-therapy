@@ -68,8 +68,8 @@ export async function getNotesInViewport(
   const notes: StickyNote[] = [];
 
   for (const note of notesStore.values()) {
-    // Only return approved notes for public view
-    if (note.moderationStatus !== "approved") continue;
+    // Return approved and pending notes for public view
+    if (note.moderationStatus !== "approved" && note.moderationStatus !== "pending") continue;
 
     // Check if note is within viewport bounds (with some padding)
     const padding = 200;

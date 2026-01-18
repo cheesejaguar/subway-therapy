@@ -1,15 +1,15 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
-// Get all approved notes (for public wall)
-export const getApprovedNotes = query({
+// Get all public notes (approved + pending, for public wall)
+export const getPublicNotes = query({
   args: {},
   handler: async (ctx) => {
-    const notes = await ctx.db
-      .query("notes")
-      .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "approved"))
-      .collect();
-    return notes;
+    const allNotes = await ctx.db.query("notes").collect();
+    // Return approved and pending notes (pending shown with placeholder)
+    return allNotes.filter(
+      (note) => note.moderationStatus === "approved" || note.moderationStatus === "pending"
+    );
   },
 });
 
@@ -23,13 +23,12 @@ export const getNotesInViewport = query({
   },
   handler: async (ctx, args) => {
     const padding = 200;
-    const notes = await ctx.db
-      .query("notes")
-      .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "approved"))
-      .collect();
+    const allNotes = await ctx.db.query("notes").collect();
 
-    return notes.filter(
+    // Filter to approved + pending, within viewport
+    return allNotes.filter(
       (note) =>
+        (note.moderationStatus === "approved" || note.moderationStatus === "pending") &&
         note.x >= args.minX - padding &&
         note.x <= args.maxX + padding &&
         note.y >= args.minY - padding &&
