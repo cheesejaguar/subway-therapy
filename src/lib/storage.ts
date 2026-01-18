@@ -1,4 +1,5 @@
 import { StickyNote, ModerationStatus, ViewportBounds, WALL_CONFIG } from "./types";
+import { deleteNoteImage } from "./blob";
 
 // In-memory storage for development (replace with database in production)
 // This simulates what would be stored in Vercel Edge Config / KV
@@ -99,6 +100,11 @@ export async function deleteNote(id: string): Promise<boolean> {
   const gridX = Math.floor(note.x / cellWidth);
   const gridY = Math.floor(note.y / cellHeight);
   occupiedPositions.delete(positionKey(gridX, gridY));
+
+  // Delete the image from blob storage
+  if (note.imageUrl) {
+    await deleteNoteImage(note.imageUrl);
+  }
 
   return notesStore.delete(id);
 }

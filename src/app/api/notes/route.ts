@@ -13,6 +13,7 @@ import {
   canUserPostNote,
   recordNoteSubmission,
 } from "@/lib/session";
+import { uploadNoteImage } from "@/lib/blob";
 import { StickyNote, CreateNoteRequest, ViewportBounds } from "@/lib/types";
 
 // Initialize sample notes on first request
@@ -104,6 +105,21 @@ export async function POST(request: NextRequest) {
     // Get or create session
     const sessionId = await getOrCreateSessionId();
 
+    // Generate note ID
+    const noteId = uuidv4();
+
+    // Upload image to blob storage
+    let imageUrl: string;
+    try {
+      imageUrl = await uploadNoteImage(body.imageData, noteId);
+    } catch (error) {
+      console.error("Failed to upload image:", error);
+      return NextResponse.json(
+        { error: "Failed to upload image" },
+        { status: 500 }
+      );
+    }
+
     // Find position for the note
     const position =
       body.x !== undefined && body.y !== undefined
@@ -112,8 +128,8 @@ export async function POST(request: NextRequest) {
 
     // Create the note
     const note: StickyNote = {
-      id: uuidv4(),
-      imageUrl: body.imageData, // In production, upload to blob storage and use URL
+      id: noteId,
+      imageUrl,
       color: body.color,
       x: position.x,
       y: position.y,
