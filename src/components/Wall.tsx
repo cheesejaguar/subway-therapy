@@ -238,7 +238,7 @@ export default function Wall({
   return (
     <div
       ref={containerRef}
-      className="wall-container subway-tiles w-full h-full overflow-hidden cursor-grab active:cursor-grabbing focus:outline-none"
+      className="wall-container w-full h-full overflow-hidden cursor-grab active:cursor-grabbing focus:outline-none bg-[var(--tile-grout)]"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -253,7 +253,7 @@ export default function Wall({
       aria-label="Virtual sticky note wall. Use arrow keys to navigate, plus and minus to zoom, 0 to reset view."
     >
       <div
-        className="relative"
+        className="relative subway-tiles"
         style={{
           transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})`,
           transformOrigin: "0 0",
