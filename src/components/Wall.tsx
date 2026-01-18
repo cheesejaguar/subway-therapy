@@ -5,9 +5,14 @@ import React, {
   useState,
   useEffect,
   useCallback,
+  useMemo,
 } from "react";
 import { StickyNote, NoteColor, WALL_CONFIG, ViewportBounds, NOTE_COLORS } from "@/lib/types";
 import StickyNoteComponent from "./StickyNote";
+import Minimap from "./Minimap";
+
+// Tile size for chunked rendering (pixels)
+const TILE_SIZE = 2000;
 
 interface PendingNote {
   imageData: string;
@@ -306,15 +311,59 @@ export default function Wall({
     [containerSize, wallHeight]
   );
 
-  // Filter notes to only render those in viewport (with padding)
+  // Get current viewport bounds
   const bounds = getViewportBounds();
-  const padding = 300;
-  const visibleNotes = notes.filter(
-    (note) =>
-      note.x >= bounds.minX - padding &&
-      note.x <= bounds.maxX + padding &&
-      note.y >= bounds.minY - padding &&
-      note.y <= bounds.maxY + padding
+
+  // Calculate visible tiles for chunked rendering
+  const visibleTiles = useMemo(() => {
+    const tiles: { x: number; y: number; key: string }[] = [];
+    const padding = TILE_SIZE; // One tile buffer
+
+    const startTileX = Math.max(0, Math.floor((bounds.minX - padding) / TILE_SIZE));
+    const endTileX = Math.min(
+      Math.ceil(wallWidth / TILE_SIZE),
+      Math.ceil((bounds.maxX + padding) / TILE_SIZE)
+    );
+    const startTileY = Math.max(0, Math.floor((bounds.minY - padding) / TILE_SIZE));
+    const endTileY = Math.min(
+      Math.ceil(wallHeight / TILE_SIZE),
+      Math.ceil((bounds.maxY + padding) / TILE_SIZE)
+    );
+
+    for (let ty = startTileY; ty < endTileY; ty++) {
+      for (let tx = startTileX; tx < endTileX; tx++) {
+        tiles.push({
+          x: tx * TILE_SIZE,
+          y: ty * TILE_SIZE,
+          key: `tile-${tx}-${ty}`,
+        });
+      }
+    }
+
+    return tiles;
+  }, [bounds.minX, bounds.maxX, bounds.minY, bounds.maxY, wallWidth, wallHeight]);
+
+  // Filter notes to only render those in viewport (with padding)
+  const notePadding = 300;
+  const visibleNotes = useMemo(() => {
+    return notes.filter(
+      (note) =>
+        note.x >= bounds.minX - notePadding &&
+        note.x <= bounds.maxX + notePadding &&
+        note.y >= bounds.minY - notePadding &&
+        note.y <= bounds.maxY + notePadding
+    );
+  }, [notes, bounds.minX, bounds.maxX, bounds.minY, bounds.maxY]);
+
+  // Handle minimap navigation
+  const handleMinimapNavigate = useCallback(
+    (wallX: number, wallY: number) => {
+      // Center the viewport on the clicked position
+      const newX = -wallX + containerSize.width / 2 / zoom;
+      const newY = -wallY + containerSize.height / 2 / zoom;
+      setPosition({ x: newX * zoom, y: newY * zoom });
+    },
+    [containerSize, zoom]
   );
 
   return (
@@ -338,7 +387,7 @@ export default function Wall({
       aria-label="Virtual sticky note wall. Use arrow keys to navigate, plus and minus to zoom, 0 to reset view."
     >
       <div
-        className="relative subway-tiles"
+        className="relative"
         style={{
           transform: `translate3d(${position.x}px, ${position.y}px, 0) scale(${zoom})`,
           transformOrigin: "0 0",
@@ -346,6 +395,20 @@ export default function Wall({
           height: wallHeight,
         }}
       >
+        {/* Render only visible tiles */}
+        {visibleTiles.map((tile) => (
+          <div
+            key={tile.key}
+            className="absolute subway-tiles"
+            style={{
+              left: tile.x,
+              top: tile.y,
+              width: TILE_SIZE,
+              height: Math.min(TILE_SIZE, wallHeight - tile.y),
+            }}
+          />
+        ))}
+
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="bg-white/90 px-6 py-4 rounded-lg shadow-lg">
@@ -443,6 +506,14 @@ export default function Wall({
             Cancel
           </button>
         </div>
+      )}
+
+      {/* Minimap for navigation */}
+      {!isPlacingNote && (
+        <Minimap
+          viewportBounds={bounds}
+          onNavigate={handleMinimapNavigate}
+        />
       )}
     </div>
   );

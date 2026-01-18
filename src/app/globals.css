@@ -71,9 +71,9 @@ body {
   background-size: var(--tile-size) var(--tile-size);
   background-position: -1px -1px;
   /* GPU acceleration for smooth panning */
-  will-change: transform;
-  transform: translateZ(0);
+  will-change: auto;
   backface-visibility: hidden;
+  contain: strict;
 }
 
 /* Sticky note base styles */
