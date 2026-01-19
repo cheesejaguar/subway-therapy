@@ -44,6 +44,9 @@ export default function NoteCreator({
   const [hasDrawn, setHasDrawn] = useState(false);
   const [brushSize, setBrushSize] = useState(3);
 
+  // Track previous note color to detect changes
+  const prevNoteColorRef = useRef<NoteColor>(noteColor);
+
   // Initialize canvas
   useEffect(() => {
     if (!isOpen || inputMode !== "draw") return;
@@ -62,8 +65,12 @@ export default function NoteCreator({
     ctx.fillStyle = NOTE_COLORS[noteColor];
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Reset drawing state when note color changes
-    setHasDrawn(false);
+    // Reset drawing state when note color changes (tracked via ref to avoid setState in effect)
+    if (prevNoteColorRef.current !== noteColor) {
+      prevNoteColorRef.current = noteColor;
+      // Schedule state update outside the effect body
+      queueMicrotask(() => setHasDrawn(false));
+    }
   }, [isOpen, noteColor, inputMode]);
 
   const getPointerPosition = useCallback(

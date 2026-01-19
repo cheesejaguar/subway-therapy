@@ -16,7 +16,7 @@ export function checkForBlockedContent(text: string): boolean {
 }
 
 export function findAvailablePosition(): { x: number; y: number } {
-  const { wallWidth, wallHeight, noteWidth, noteHeight } = WALL_CONFIG;
+  const { wallHeight, noteHeight } = WALL_CONFIG;
 
   // Generate a random position within the wall bounds
   // Center around the middle of the wall (500 feet = 300,000 px) with some variance
