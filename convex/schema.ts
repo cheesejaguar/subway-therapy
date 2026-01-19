@@ -17,4 +17,13 @@ export default defineSchema({
     .index("by_visibleId", ["visibleId"])
     .index("by_moderationStatus", ["moderationStatus"])
     .index("by_sessionId", ["sessionId"]),
+
+  // Server-side rate limiting table - stores hashed identifiers to prevent bypass
+  rateLimits: defineTable({
+    identifier: v.string(), // SHA-256 hash of IP address for privacy
+    createdAt: v.number(), // Unix timestamp in milliseconds
+    noteId: v.string(), // Reference to the note created
+  })
+    .index("by_identifier", ["identifier"])
+    .index("by_identifier_and_time", ["identifier", "createdAt"]),
 });

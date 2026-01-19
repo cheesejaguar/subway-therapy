@@ -5,6 +5,10 @@ import { v4 as uuidv4 } from "uuid";
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ONE_YEAR_MS = 365 * ONE_DAY_MS;
 
+// NOTE: Cookie-based rate limiting is kept for UX purposes (showing countdown timer)
+// but the authoritative rate limiting is now server-side using IP-based checks.
+// See src/lib/rateLimit.ts for the secure server-side implementation.
+
 export async function getOrCreateSessionId(): Promise<string> {
   const cookieStore = await cookies();
   let sessionId = cookieStore.get(SESSION_COOKIE_NAME)?.value;

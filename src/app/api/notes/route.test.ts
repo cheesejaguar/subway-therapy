@@ -4,6 +4,7 @@ import { createMockRequest, parseResponse } from "@/test/api-helpers";
 import * as storage from "@/lib/storage";
 import * as convex from "@/lib/convex";
 import * as session from "@/lib/session";
+import * as rateLimit from "@/lib/rateLimit";
 import * as blob from "@/lib/blob";
 import * as moderation from "@/lib/moderation";
 import type { StickyNote } from "@/lib/types";
@@ -25,8 +26,12 @@ vi.mock("@/lib/convex", () => ({
 vi.mock("@/lib/session", () => ({
   getOrCreateSessionId: vi.fn(),
   setSessionCookie: vi.fn(),
-  canUserPostNote: vi.fn(),
   recordNoteSubmission: vi.fn(),
+}));
+
+vi.mock("@/lib/rateLimit", () => ({
+  canClientPostNote: vi.fn(),
+  recordClientSubmission: vi.fn(),
 }));
 
 vi.mock("@/lib/blob", () => ({
@@ -174,7 +179,8 @@ describe("POST /api/notes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(convex.isConvexConfigured).mockReturnValue(false);
-    vi.mocked(session.canUserPostNote).mockResolvedValue({ canPost: true });
+    vi.mocked(rateLimit.canClientPostNote).mockResolvedValue({ canPost: true });
+    vi.mocked(rateLimit.recordClientSubmission).mockResolvedValue(undefined);
     vi.mocked(session.getOrCreateSessionId).mockResolvedValue("test-session");
     vi.mocked(session.setSessionCookie).mockResolvedValue(undefined);
     vi.mocked(session.recordNoteSubmission).mockResolvedValue(undefined);
@@ -191,7 +197,7 @@ describe("POST /api/notes", () => {
   });
 
   it("should return 429 if user cannot post", async () => {
-    vi.mocked(session.canUserPostNote).mockResolvedValue({
+    vi.mocked(rateLimit.canClientPostNote).mockResolvedValue({
       canPost: false,
       reason: "Only one note per person per day!",
       timeUntilNextPost: 3600000,
@@ -439,7 +445,7 @@ describe("POST /api/notes", () => {
   });
 
   it("should handle general errors gracefully", async () => {
-    vi.mocked(session.canUserPostNote).mockRejectedValue(
+    vi.mocked(rateLimit.canClientPostNote).mockRejectedValue(
       new Error("Unexpected error")
     );
 

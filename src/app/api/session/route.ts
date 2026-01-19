@@ -1,9 +1,11 @@
-import { NextResponse } from "next/server";
-import { canUserPostNote, formatTimeRemaining } from "@/lib/session";
+import { NextRequest, NextResponse } from "next/server";
+import { formatTimeRemaining } from "@/lib/session";
+import { canClientPostNote } from "@/lib/rateLimit";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const postCheck = await canUserPostNote();
+    // Use server-side rate limiting (IP-based, secure)
+    const postCheck = await canClientPostNote(request);
 
     return NextResponse.json({
       canPost: postCheck.canPost,
