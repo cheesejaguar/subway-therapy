@@ -63,6 +63,28 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
     [scale, wallHeight, onNavigate]
   );
 
+  // Use document-level listeners for smooth dragging
+  React.useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      e.preventDefault();
+      navigateToPosition(e.clientX);
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDragging, navigateToPosition]);
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       e.preventDefault();
@@ -71,22 +93,6 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
     },
     [navigateToPosition]
   );
-
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!isDragging) return;
-      navigateToPosition(e.clientX);
-    },
-    [isDragging, navigateToPosition]
-  );
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    setIsDragging(false);
-  }, []);
 
   // Touch handlers
   const handleTouchStart = useCallback(
@@ -134,12 +140,13 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
       </div>
       <div
         ref={sliderRef}
-        className="relative bg-[var(--tile-bg)] border border-gray-300 rounded cursor-pointer"
+        className={`relative bg-[var(--tile-bg)] border rounded select-none ${
+          isDragging
+            ? "border-[var(--ui-primary)] cursor-grabbing"
+            : "border-gray-300 cursor-grab hover:border-gray-400"
+        }`}
         style={{ width: sliderWidth, height: sliderHeight }}
         onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
@@ -157,15 +164,19 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
 
         {/* Viewport indicator / thumb */}
         <div
-          className="absolute top-0 h-full border-2 border-[var(--ui-primary)] bg-[var(--ui-primary)]/30 rounded-sm transition-[left,width] duration-75"
+          className={`absolute top-0 h-full rounded-sm transition-colors ${
+            isDragging
+              ? "border-2 border-[var(--ui-primary)] bg-[var(--ui-primary)]/50"
+              : "border-2 border-[var(--ui-primary)] bg-[var(--ui-primary)]/30 hover:bg-[var(--ui-primary)]/40"
+          }`}
           style={{
             left: viewportX,
             width: viewportW,
           }}
         />
       </div>
-      <div className="text-[10px] text-gray-500 text-center mt-1">
-        Drag to navigate
+      <div className={`text-[10px] text-center mt-1 ${isDragging ? "text-[var(--ui-primary)] font-medium" : "text-gray-500"}`}>
+        {isDragging ? "Navigating..." : "Drag to navigate"}
       </div>
     </div>
   );
