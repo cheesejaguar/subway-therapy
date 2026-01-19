@@ -12,9 +12,9 @@ import {
 import {
   getOrCreateSessionId,
   setSessionCookie,
-  canUserPostNote,
   recordNoteSubmission,
 } from "@/lib/session";
+import { canClientPostNote, recordClientSubmission } from "@/lib/rateLimit";
 import { uploadNoteImage } from "@/lib/blob";
 import { StickyNote, CreateNoteRequest, ViewportBounds, ConvexNote, mapConvexNote } from "@/lib/types";
 import { moderateImage } from "@/lib/moderation";
@@ -81,8 +81,8 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Check if user can post
-    const postCheck = await canUserPostNote();
+    // Server-side rate limiting using IP address (secure - cannot be bypassed by clearing cookies)
+    const postCheck = await canClientPostNote(request);
     if (!postCheck.canPost) {
       return NextResponse.json(
         {
@@ -204,7 +204,10 @@ export async function POST(request: NextRequest) {
       await createNoteInMemory(note);
     }
 
-    // Record that this session has posted
+    // Record submission server-side (authoritative rate limiting by IP)
+    await recordClientSubmission(request, noteId);
+
+    // Also record in cookie for UX purposes (shows countdown timer to user)
     await recordNoteSubmission();
 
     // Set session cookie

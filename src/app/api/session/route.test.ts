@@ -1,12 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { NextRequest } from "next/server";
 import { GET } from "./route";
+import * as rateLimit from "@/lib/rateLimit";
 import * as session from "@/lib/session";
 
-// Mock the session module
+// Mock the rateLimit module
+vi.mock("@/lib/rateLimit", () => ({
+  canClientPostNote: vi.fn(),
+}));
+
+// Mock the session module for formatTimeRemaining
 vi.mock("@/lib/session", () => ({
-  canUserPostNote: vi.fn(),
   formatTimeRemaining: vi.fn((ms: number) => `${Math.floor(ms / 3600000)}h`),
 }));
+
+// Create a mock request with IP headers
+function createMockRequest(): NextRequest {
+  return new NextRequest("http://localhost:3000/api/session", {
+    headers: {
+      "x-forwarded-for": "192.168.1.1",
+    },
+  });
+}
 
 describe("GET /api/session", () => {
   beforeEach(() => {
@@ -14,11 +29,11 @@ describe("GET /api/session", () => {
   });
 
   it("should return canPost true when user can post", async () => {
-    vi.mocked(session.canUserPostNote).mockResolvedValue({
+    vi.mocked(rateLimit.canClientPostNote).mockResolvedValue({
       canPost: true,
     });
 
-    const response = await GET();
+    const response = await GET(createMockRequest());
     const data = await response.json();
 
     expect(response.status).toBe(200);
@@ -28,13 +43,13 @@ describe("GET /api/session", () => {
   });
 
   it("should return canPost false with reason when user cannot post", async () => {
-    vi.mocked(session.canUserPostNote).mockResolvedValue({
+    vi.mocked(rateLimit.canClientPostNote).mockResolvedValue({
       canPost: false,
       reason: "Only one note per person per day!",
       timeUntilNextPost: 3600000, // 1 hour
     });
 
-    const response = await GET();
+    const response = await GET(createMockRequest());
     const data = await response.json();
 
     expect(response.status).toBe(200);
@@ -44,11 +59,11 @@ describe("GET /api/session", () => {
   });
 
   it("should return canPost true on error", async () => {
-    vi.mocked(session.canUserPostNote).mockRejectedValue(
-      new Error("Session error")
+    vi.mocked(rateLimit.canClientPostNote).mockRejectedValue(
+      new Error("Rate limit error")
     );
 
-    const response = await GET();
+    const response = await GET(createMockRequest());
     const data = await response.json();
 
     expect(response.status).toBe(200);

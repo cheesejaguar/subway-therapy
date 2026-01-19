@@ -9,6 +9,7 @@
  */
 
 import type * as notes from "../notes.js";
+import type * as rateLimits from "../rateLimits.js";
 
 import type {
   ApiFromModules,
@@ -18,6 +19,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   notes: typeof notes;
+  rateLimits: typeof rateLimits;
 }>;
 
 /**
