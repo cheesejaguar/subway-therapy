@@ -358,10 +358,10 @@ export default function Wall({
   // Handle minimap navigation
   const handleMinimapNavigate = useCallback(
     (wallX: number, wallY: number) => {
-      // Center the viewport on the clicked position
-      const newX = -wallX + containerSize.width / 2 / zoom;
-      const newY = -wallY + containerSize.height / 2 / zoom;
-      setPosition({ x: newX * zoom, y: newY * zoom });
+      // Center the viewport on the target position
+      const newX = -wallX * zoom + containerSize.width / 2;
+      const newY = -wallY * zoom + containerSize.height / 2;
+      setPosition({ x: newX, y: newY });
     },
     [containerSize, zoom]
   );
