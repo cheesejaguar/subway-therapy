@@ -17,6 +17,7 @@ import {
 } from "@/lib/session";
 import { uploadNoteImage } from "@/lib/blob";
 import { StickyNote, CreateNoteRequest, ViewportBounds, ConvexNote, mapConvexNote } from "@/lib/types";
+import { moderateImage } from "@/lib/moderation";
 
 // Initialize sample notes on first request (for dev mode only)
 let initialized = false;
@@ -136,6 +137,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Run AI moderation on the image
+    let moderationStatus: "pending" | "approved" | "rejected" = "pending";
+    let moderationReason = "";
+
+    try {
+      const moderation = await moderateImage(body.imageData);
+
+      // Auto-approve/reject with high confidence, otherwise leave pending for manual review
+      const CONFIDENCE_THRESHOLD = 0.8;
+
+      if (moderation.confidence >= CONFIDENCE_THRESHOLD) {
+        moderationStatus = moderation.approved ? "approved" : "rejected";
+        moderationReason = moderation.reason;
+      }
+      // Log moderation result for monitoring
+      console.log("AI Moderation:", {
+        noteId,
+        decision: moderationStatus,
+        confidence: moderation.confidence,
+        reason: moderation.reason,
+        tokens: { input: moderation.inputTokens, output: moderation.outputTokens },
+      });
+    } catch (error) {
+      console.error("AI moderation failed, defaulting to pending:", error);
+      // On moderation failure, leave as pending for manual review
+    }
+
     // Find position for the note
     const position =
       body.x !== undefined && body.y !== undefined
@@ -155,7 +183,7 @@ export async function POST(request: NextRequest) {
         y: position.y,
         rotation,
         createdAt,
-        moderationStatus: "pending",
+        moderationStatus,
         flagCount: 0,
         sessionId,
       });
@@ -169,7 +197,7 @@ export async function POST(request: NextRequest) {
         y: position.y,
         rotation,
         createdAt,
-        moderationStatus: "pending",
+        moderationStatus,
         flagCount: 0,
         sessionId,
       };
@@ -182,6 +210,16 @@ export async function POST(request: NextRequest) {
     // Set session cookie
     await setSessionCookie(sessionId);
 
+    // Generate appropriate message based on moderation status
+    let message: string;
+    if (moderationStatus === "approved") {
+      message = "Note posted and approved! It's now visible on the wall.";
+    } else if (moderationStatus === "rejected") {
+      message = `Note was not approved: ${moderationReason || "Content does not meet community guidelines."}`;
+    } else {
+      message = "Note posted! It will be visible to others after moderation.";
+    }
+
     return NextResponse.json({
       success: true,
       note: {
@@ -189,9 +227,9 @@ export async function POST(request: NextRequest) {
         color: body.color,
         x: position.x,
         y: position.y,
-        moderationStatus: "pending",
+        moderationStatus,
       },
-      message: "Note posted! It will be visible to others after moderation.",
+      message,
     });
   } catch (error) {
     console.error("Error creating note:", error);
