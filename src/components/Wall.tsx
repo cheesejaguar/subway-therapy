@@ -405,6 +405,8 @@ export default function Wall({
               top: tile.y,
               width: TILE_SIZE,
               height: Math.min(TILE_SIZE, wallHeight - tile.y),
+              // Offset background to align with global grid
+              backgroundPosition: `${-tile.x - 1}px ${-tile.y - 1}px`,
             }}
           />
         ))}
