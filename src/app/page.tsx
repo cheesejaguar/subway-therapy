@@ -173,7 +173,7 @@ export default function Home() {
   };
 
   return (
-    <div className="relative w-screen overflow-hidden" style={{ height: "100dvh" }}>
+    <div className="wall-page relative w-screen">
       {/* Main wall */}
       <Wall
         notes={notes}

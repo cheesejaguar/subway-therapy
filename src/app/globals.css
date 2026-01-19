@@ -44,9 +44,14 @@
 html, body {
   margin: 0;
   padding: 0;
-  overflow: hidden;
   width: 100%;
-  height: 100dvh; /* Use dynamic viewport height for mobile */
+  min-height: 100dvh;
+}
+
+/* Wall page specific - prevents scroll and enables touch gestures */
+.wall-page {
+  overflow: hidden;
+  height: 100dvh;
   touch-action: none;
 }
 
