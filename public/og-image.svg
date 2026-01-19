@@ -1,0 +1,37 @@
+<svg width="1200" height="630" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background - subway tile color -->
+  <rect width="1200" height="630" fill="#e8e4dc"/>
+
+  <!-- Grid lines -->
+  <defs>
+    <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+      <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#c4c0b8" stroke-width="2"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+
+  <!-- Sticky notes -->
+  <g transform="rotate(-3, 200, 200)">
+    <rect x="100" y="150" width="180" height="180" fill="#fff740" filter="drop-shadow(3px 3px 5px rgba(0,0,0,0.2))"/>
+  </g>
+  <g transform="rotate(2, 400, 250)">
+    <rect x="320" y="200" width="180" height="180" fill="#ff7eb9" filter="drop-shadow(3px 3px 5px rgba(0,0,0,0.2))"/>
+  </g>
+  <g transform="rotate(-1, 550, 150)">
+    <rect x="500" y="100" width="180" height="180" fill="#7afcff" filter="drop-shadow(3px 3px 5px rgba(0,0,0,0.2))"/>
+  </g>
+  <g transform="rotate(3, 750, 280)">
+    <rect x="700" y="220" width="180" height="180" fill="#7aff92" filter="drop-shadow(3px 3px 5px rgba(0,0,0,0.2))"/>
+  </g>
+  <g transform="rotate(-2, 950, 180)">
+    <rect x="900" y="130" width="180" height="180" fill="#ffb347" filter="drop-shadow(3px 3px 5px rgba(0,0,0,0.2))"/>
+  </g>
+
+  <!-- Title -->
+  <text x="600" y="520" font-family="system-ui, -apple-system, sans-serif" font-size="72" font-weight="bold" fill="#2d5a27" text-anchor="middle">
+    Subway Therapy
+  </text>
+  <text x="600" y="580" font-family="system-ui, -apple-system, sans-serif" font-size="28" fill="#666" text-anchor="middle">
+    Leave a note on the virtual wall
+  </text>
+</svg>
