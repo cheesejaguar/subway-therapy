@@ -1,17 +1,14 @@
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { generateText } from "ai";
+import { createGateway, generateText } from "ai";
 
 // Vercel AI Gateway configuration
-const vercelAI = createOpenAICompatible({
-  name: "vercel-ai-gateway",
-  baseURL: "https://api.vercel.ai/v1",
-  headers: {
-    Authorization: `Bearer ${process.env.VERCEL_AI_API_KEY}`,
-  },
+// Uses AI_GATEWAY_API_KEY environment variable by default
+// Base URL: https://ai-gateway.vercel.sh/v3/ai
+const gateway = createGateway({
+  apiKey: process.env.AI_GATEWAY_API_KEY,
 });
 
 // Llama 4 Scout model via Vercel AI Gateway
-const moderationModel = vercelAI("meta/llama-4-scout");
+const moderationModel = gateway("meta/llama-4-scout");
 
 export interface ModerationResult {
   approved: boolean;

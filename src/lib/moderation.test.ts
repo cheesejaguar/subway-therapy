@@ -9,10 +9,7 @@ import { generateText } from "ai";
 // Mock the AI SDK
 vi.mock("ai", () => ({
   generateText: vi.fn(),
-}));
-
-vi.mock("@ai-sdk/openai-compatible", () => ({
-  createOpenAICompatible: vi.fn(() => vi.fn(() => "mock-model")),
+  createGateway: vi.fn(() => vi.fn(() => "mock-model")),
 }));
 
 describe("moderation", () => {

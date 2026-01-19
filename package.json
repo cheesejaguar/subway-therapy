@@ -13,7 +13,6 @@
     "test:ci": "vitest run --coverage --reporter=verbose"
   },
   "dependencies": {
-    "@ai-sdk/openai-compatible": "^2.0.13",
     "@vercel/blob": "^0.27.0",
     "ai": "^6.0.39",
     "convex": "^1.31.5",
