@@ -3,6 +3,25 @@
 import React, { useCallback, useRef, useState } from "react";
 import { WALL_CONFIG, ViewportBounds } from "@/lib/types";
 
+// Official MTA subway line colors
+const MTA_COLORS = {
+  red: "#EE352E",    // 1, 2, 3
+  orange: "#FF6319", // F, M
+  gray: "#A7A9AC",   // L
+};
+
+// Subway bullet component
+function SubwayBullet({ line, color }: { line: string; color: string }) {
+  return (
+    <div
+      className="w-5 h-5 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
+      style={{ backgroundColor: color }}
+    >
+      {line}
+    </div>
+  );
+}
+
 interface MinimapProps {
   viewportBounds: ViewportBounds;
   onNavigate: (x: number, y: number) => void;
@@ -100,10 +119,18 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
 
   return (
     <div className="absolute top-4 left-4 bg-white rounded-lg shadow-lg p-3 z-20">
-      <div className="text-xs text-gray-600 mb-2 flex justify-between">
-        <span>0 ft</span>
+      <div className="text-xs text-gray-600 mb-2 flex justify-between items-center">
+        <div className="flex gap-0.5">
+          <SubwayBullet line="1" color={MTA_COLORS.red} />
+          <SubwayBullet line="2" color={MTA_COLORS.red} />
+          <SubwayBullet line="3" color={MTA_COLORS.red} />
+        </div>
         <span className="font-medium">{currentFeet} ft</span>
-        <span>1000 ft</span>
+        <div className="flex gap-0.5">
+          <SubwayBullet line="F" color={MTA_COLORS.orange} />
+          <SubwayBullet line="M" color={MTA_COLORS.orange} />
+          <SubwayBullet line="L" color={MTA_COLORS.gray} />
+        </div>
       </div>
       <div
         ref={sliderRef}
