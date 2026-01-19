@@ -110,3 +110,63 @@ export function mapConvexNote(note: ConvexNote): StickyNote {
     sessionId: note.sessionId,
   };
 }
+
+// Maximum allowed overlap percentage (25% = middle of 20-30% range)
+export const MAX_OVERLAP_PERCENTAGE = 0.25;
+
+// Calculate the overlap percentage between two notes
+// Returns the percentage of the new note's area that overlaps with existing note
+export function calculateOverlapPercentage(
+  newX: number,
+  newY: number,
+  existingX: number,
+  existingY: number,
+  noteWidth: number = WALL_CONFIG.noteWidth,
+  noteHeight: number = WALL_CONFIG.noteHeight
+): number {
+  // Calculate the intersection rectangle
+  const left = Math.max(newX, existingX);
+  const right = Math.min(newX + noteWidth, existingX + noteWidth);
+  const top = Math.max(newY, existingY);
+  const bottom = Math.min(newY + noteHeight, existingY + noteHeight);
+
+  // If there's no intersection, return 0
+  if (left >= right || top >= bottom) {
+    return 0;
+  }
+
+  // Calculate intersection area
+  const intersectionArea = (right - left) * (bottom - top);
+  const noteArea = noteWidth * noteHeight;
+
+  return intersectionArea / noteArea;
+}
+
+// Check if placing a note at the given position would exceed the max overlap
+// Returns the maximum overlap percentage found with any existing note
+export function getMaxOverlapWithNotes(
+  newX: number,
+  newY: number,
+  existingNotes: Array<{ x: number; y: number }>
+): number {
+  let maxOverlap = 0;
+
+  for (const note of existingNotes) {
+    const overlap = calculateOverlapPercentage(newX, newY, note.x, note.y);
+    if (overlap > maxOverlap) {
+      maxOverlap = overlap;
+    }
+  }
+
+  return maxOverlap;
+}
+
+// Check if placement is valid (doesn't exceed max overlap)
+export function isPlacementValid(
+  newX: number,
+  newY: number,
+  existingNotes: Array<{ x: number; y: number }>,
+  maxOverlap: number = MAX_OVERLAP_PERCENTAGE
+): boolean {
+  return getMaxOverlapWithNotes(newX, newY, existingNotes) <= maxOverlap;
+}

@@ -180,6 +180,7 @@ describe("POST /api/notes", () => {
     vi.mocked(session.recordNoteSubmission).mockResolvedValue(undefined);
     vi.mocked(blob.uploadNoteImage).mockResolvedValue("https://blob.test/image.png");
     vi.mocked(storage.findAvailablePosition).mockReturnValue({ x: 300000, y: 1000 });
+    vi.mocked(storage.getAllNotes).mockResolvedValue([]); // No existing notes for overlap check
     vi.mocked(storage.createNote).mockImplementation(async (note: StickyNote) => note);
     vi.mocked(moderation.moderateImage).mockResolvedValue({
       approved: true,
@@ -379,6 +380,40 @@ describe("POST /api/notes", () => {
     expect(response.status).toBe(200);
     expect(data.note.x).toBe(12345);
     expect(data.note.y).toBe(6789);
+  });
+
+  it("should reject placement with excessive overlap", async () => {
+    // Mock an existing note at the same position
+    vi.mocked(storage.getAllNotes).mockResolvedValue([
+      {
+        id: "existing-note",
+        imageUrl: "https://example.com/1.png",
+        color: "yellow",
+        x: 100, // Same position as requested
+        y: 200,
+        rotation: 0,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        moderationStatus: "approved",
+        flagCount: 0,
+        sessionId: "other-session",
+      },
+    ]);
+
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+        x: 100, // Exact same position = 100% overlap
+        y: 200,
+      },
+    });
+
+    const response = await POST(request);
+    const data = await parseResponse<{ error: string }>(response);
+
+    expect(response.status).toBe(400);
+    expect(data.error).toContain("overlap");
   });
 
   it("should use random position when not provided", async () => {

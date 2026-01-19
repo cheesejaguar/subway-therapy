@@ -7,7 +7,7 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import { StickyNote, NoteColor, WALL_CONFIG, ViewportBounds, NOTE_COLORS } from "@/lib/types";
+import { StickyNote, NoteColor, WALL_CONFIG, ViewportBounds, NOTE_COLORS, getMaxOverlapWithNotes, MAX_OVERLAP_PERCENTAGE } from "@/lib/types";
 import StickyNoteComponent from "./StickyNote";
 import Minimap from "./Minimap";
 
@@ -55,6 +55,7 @@ export default function Wall({
   const [containerSize, setContainerSize] = useState({ width: 1000, height: 1000 });
   const [ghostPosition, setGhostPosition] = useState<{ x: number; y: number } | null>(null);
   const [hasInitialized, setHasInitialized] = useState(false);
+  const [currentOverlap, setCurrentOverlap] = useState(0);
 
   const { wallWidth, wallHeight } = WALL_CONFIG;
 
@@ -136,7 +137,11 @@ export default function Wall({
         // Update ghost position during placement mode
         const wallPos = screenToWall(e.clientX, e.clientY);
         // Center the note on the cursor
-        setGhostPosition({ x: wallPos.x - 75, y: wallPos.y - 75 });
+        const newGhostPos = { x: wallPos.x - 75, y: wallPos.y - 75 };
+        setGhostPosition(newGhostPos);
+        // Calculate overlap with existing notes
+        const overlap = getMaxOverlapWithNotes(newGhostPos.x, newGhostPos.y, notes);
+        setCurrentOverlap(overlap);
         return;
       }
       if (!isDragging) return;
@@ -145,22 +150,27 @@ export default function Wall({
         y: e.clientY - dragStart.y,
       });
     },
-    [isDragging, dragStart, isPlacingNote, screenToWall]
+    [isDragging, dragStart, isPlacingNote, screenToWall, notes]
   );
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
   }, []);
 
+  const isPlacementValid = currentOverlap <= MAX_OVERLAP_PERCENTAGE;
+
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       if (isPlacingNote && onPlaceNote && ghostPosition) {
         e.preventDefault();
         e.stopPropagation();
-        onPlaceNote(ghostPosition.x, ghostPosition.y);
+        // Only allow placement if overlap is within acceptable range
+        if (currentOverlap <= MAX_OVERLAP_PERCENTAGE) {
+          onPlaceNote(ghostPosition.x, ghostPosition.y);
+        }
       }
     },
-    [isPlacingNote, onPlaceNote, ghostPosition]
+    [isPlacingNote, onPlaceNote, ghostPosition, currentOverlap]
   );
 
   // Touch event handlers
@@ -176,7 +186,11 @@ export default function Wall({
       if (isPlacingNote && e.touches.length === 1) {
         // Update ghost position on touch
         const wallPos = screenToWall(e.touches[0].clientX, e.touches[0].clientY);
-        setGhostPosition({ x: wallPos.x - 75, y: wallPos.y - 75 });
+        const newGhostPos = { x: wallPos.x - 75, y: wallPos.y - 75 };
+        setGhostPosition(newGhostPos);
+        // Calculate overlap with existing notes
+        const overlap = getMaxOverlapWithNotes(newGhostPos.x, newGhostPos.y, notes);
+        setCurrentOverlap(overlap);
         return;
       }
       if (e.touches.length === 1) {
@@ -189,7 +203,7 @@ export default function Wall({
         setTouchDistance(getTouchDistance(e.touches));
       }
     },
-    [position, isPlacingNote, screenToWall]
+    [position, isPlacingNote, screenToWall, notes]
   );
 
   const handleTouchMove = useCallback(
@@ -199,7 +213,11 @@ export default function Wall({
       if (isPlacingNote && e.touches.length === 1) {
         // Update ghost position during drag
         const wallPos = screenToWall(e.touches[0].clientX, e.touches[0].clientY);
-        setGhostPosition({ x: wallPos.x - 75, y: wallPos.y - 75 });
+        const newGhostPos = { x: wallPos.x - 75, y: wallPos.y - 75 };
+        setGhostPosition(newGhostPos);
+        // Calculate overlap with existing notes
+        const overlap = getMaxOverlapWithNotes(newGhostPos.x, newGhostPos.y, notes);
+        setCurrentOverlap(overlap);
         return;
       }
 
@@ -219,20 +237,23 @@ export default function Wall({
         setTouchDistance(newDistance);
       }
     },
-    [isDragging, dragStart, touchDistance, zoom, isPlacingNote, screenToWall]
+    [isDragging, dragStart, touchDistance, zoom, isPlacingNote, screenToWall, notes]
   );
 
   const handleTouchEnd = useCallback(
     (e: React.TouchEvent) => {
       if (isPlacingNote && onPlaceNote && ghostPosition) {
         e.preventDefault();
-        onPlaceNote(ghostPosition.x, ghostPosition.y);
+        // Only allow placement if overlap is within acceptable range
+        if (currentOverlap <= MAX_OVERLAP_PERCENTAGE) {
+          onPlaceNote(ghostPosition.x, ghostPosition.y);
+        }
         return;
       }
       setIsDragging(false);
       setTouchDistance(null);
     },
-    [isPlacingNote, onPlaceNote, ghostPosition]
+    [isPlacingNote, onPlaceNote, ghostPosition, currentOverlap]
   );
 
   // Wheel event for zoom
@@ -370,7 +391,11 @@ export default function Wall({
     <div
       ref={containerRef}
       className={`wall-container w-full h-full overflow-hidden focus:outline-none bg-[var(--tile-grout)] ${
-        isPlacingNote ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"
+        isPlacingNote
+          ? isPlacementValid
+            ? "cursor-crosshair"
+            : "cursor-not-allowed"
+          : "cursor-grab active:cursor-grabbing"
       }`}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -434,18 +459,28 @@ export default function Wall({
         {/* Ghost note during placement */}
         {isPlacingNote && pendingNote && ghostPosition && (
           <div
-            className="sticky-note opacity-70 pointer-events-none"
+            className={`sticky-note pointer-events-none transition-all ${
+              isPlacementValid ? "opacity-70" : "opacity-50"
+            }`}
             style={{
-              backgroundColor: NOTE_COLORS[pendingNote.color],
+              backgroundColor: isPlacementValid
+                ? NOTE_COLORS[pendingNote.color]
+                : "#ff4444",
               left: ghostPosition.x,
               top: ghostPosition.y,
               transform: "rotate(0deg)",
+              boxShadow: isPlacementValid
+                ? undefined
+                : "0 0 20px rgba(255, 0, 0, 0.5)",
             }}
           >
             <img
               src={pendingNote.imageData}
               alt="Note preview"
               className="w-full h-full object-contain"
+              style={{
+                opacity: isPlacementValid ? 1 : 0.5,
+              }}
             />
           </div>
         )}
@@ -501,8 +536,10 @@ export default function Wall({
       {/* Placement mode UI */}
       {isPlacingNote && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white rounded-lg shadow-lg px-6 py-3 z-30 flex items-center gap-4">
-          <span className="text-gray-700 font-medium">
-            Click on the wall to place your note
+          <span className={`font-medium ${isPlacementValid ? "text-gray-700" : "text-red-600"}`}>
+            {isPlacementValid
+              ? "Click on the wall to place your note"
+              : "Too much overlap - move to a clearer spot"}
           </span>
           <button
             onClick={onCancelPlacement}
