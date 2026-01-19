@@ -13,15 +13,17 @@ export function createMockRequest(
 ): NextRequest {
   const { method = "GET", body, headers = {} } = options;
 
-  const requestInit: RequestInit = {
-    method,
-    headers: new Headers(headers),
-  };
+  const headersObj = new Headers(headers);
 
   if (body && method !== "GET") {
-    requestInit.body = JSON.stringify(body);
-    (requestInit.headers as Headers).set("Content-Type", "application/json");
+    headersObj.set("Content-Type", "application/json");
   }
+
+  const requestInit = {
+    method,
+    headers: headersObj,
+    body: body && method !== "GET" ? JSON.stringify(body) : undefined,
+  };
 
   return new NextRequest(new URL(url, "http://localhost:3000"), requestInit);
 }

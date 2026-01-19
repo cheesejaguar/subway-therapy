@@ -6,6 +6,7 @@ import * as convex from "@/lib/convex";
 import * as session from "@/lib/session";
 import * as blob from "@/lib/blob";
 import * as moderation from "@/lib/moderation";
+import type { StickyNote } from "@/lib/types";
 
 // Mock all dependencies
 vi.mock("@/lib/storage", () => ({
@@ -47,7 +48,7 @@ describe("GET /api/notes", () => {
   });
 
   it("should return notes without viewport bounds", async () => {
-    const mockNotes = [
+    const mockNotes: StickyNote[] = [
       {
         id: "note-1",
         imageUrl: "https://example.com/1.png",
@@ -73,7 +74,7 @@ describe("GET /api/notes", () => {
   });
 
   it("should return notes within viewport bounds", async () => {
-    const mockNotes = [
+    const mockNotes: StickyNote[] = [
       {
         id: "note-1",
         imageUrl: "https://example.com/1.png",
@@ -107,7 +108,7 @@ describe("GET /api/notes", () => {
   });
 
   it("should filter out rejected notes", async () => {
-    const mockNotes = [
+    const mockNotes: StickyNote[] = [
       {
         id: "note-1",
         imageUrl: "",
@@ -179,7 +180,7 @@ describe("POST /api/notes", () => {
     vi.mocked(session.recordNoteSubmission).mockResolvedValue(undefined);
     vi.mocked(blob.uploadNoteImage).mockResolvedValue("https://blob.test/image.png");
     vi.mocked(storage.findAvailablePosition).mockReturnValue({ x: 300000, y: 1000 });
-    vi.mocked(storage.createNote).mockImplementation(async (note) => note);
+    vi.mocked(storage.createNote).mockImplementation(async (note: StickyNote) => note);
     vi.mocked(moderation.moderateImage).mockResolvedValue({
       approved: true,
       reason: "Appropriate content",

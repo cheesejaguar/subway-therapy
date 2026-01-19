@@ -3,6 +3,7 @@ import { GET } from "./route";
 import { createMockRequest, parseResponse } from "@/test/api-helpers";
 import * as storage from "@/lib/storage";
 import * as convex from "@/lib/convex";
+import type { StickyNote } from "@/lib/types";
 
 // Mock the modules
 vi.mock("@/lib/storage", () => ({
@@ -23,7 +24,7 @@ describe("GET /api/admin/notes", () => {
   });
 
   it("should return notes and stats", async () => {
-    const mockNotes = [
+    const mockNotes: StickyNote[] = [
       {
         id: "note-1",
         imageUrl: "https://example.com/1.png",
