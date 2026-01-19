@@ -457,6 +457,9 @@ export default function Wall({
         style={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))" }}
         role="group"
         aria-label="Zoom controls"
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchMove={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
       >
         <button
           onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z + 0.2))}
