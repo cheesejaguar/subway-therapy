@@ -165,7 +165,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Find position for the note
-    let position =
+    const position =
       body.x !== undefined && body.y !== undefined
         ? { x: body.x, y: body.y }
         : findAvailablePosition();
