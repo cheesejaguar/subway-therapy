@@ -366,7 +366,7 @@ export default function Wall({
         );
         setZoom(newZoom);
         touchDistanceRef.current = newDistance;
-              }
+      }
     };
 
     const handleNativeTouchEnd = () => {
@@ -379,7 +379,7 @@ export default function Wall({
 
       isDraggingRef.current = false;
       touchDistanceRef.current = null;
-            setIsDragging(false);
+      setIsDragging(false);
     };
 
     // Add event listeners with { passive: false } to enable preventDefault on iOS
