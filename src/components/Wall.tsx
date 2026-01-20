@@ -434,7 +434,7 @@ export default function Wall({
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="application"
-      aria-label="Virtual sticky note wall. Use arrow keys to navigate, plus and minus to zoom, 0 to reset view."
+      aria-label="Virtual sticky note wall. Use arrow keys to navigate, pinch to zoom, tap Reset to return to center."
     >
       <div
         className="relative"
@@ -511,44 +511,24 @@ export default function Wall({
         )}
       </div>
 
-      {/* Zoom controls - positioned above safe area */}
-      <div
-        className="absolute right-4 flex flex-col gap-2 z-20"
+      {/* Reset button - positioned above safe area */}
+      <button
+        onClick={() => {
+          setZoom(1);
+          // Reset to center of wall (500 feet)
+          const centerX = -WALL_CENTER_X + containerSize.width / 2;
+          const centerY = -wallHeight / 2 + containerSize.height / 2;
+          setPosition({ x: centerX, y: centerY });
+        }}
+        className="absolute right-4 w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-sm font-medium text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target z-20"
         style={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))" }}
-        role="group"
-        aria-label="Zoom controls"
+        aria-label="Reset view"
         onTouchStart={(e) => e.stopPropagation()}
         onTouchMove={(e) => e.stopPropagation()}
         onTouchEnd={(e) => e.stopPropagation()}
       >
-        <button
-          onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z + 0.2))}
-          className="w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-xl font-bold text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target"
-          aria-label="Zoom in"
-        >
-          +
-        </button>
-        <button
-          onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z - 0.2))}
-          className="w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-xl font-bold text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target"
-          aria-label="Zoom out"
-        >
-          -
-        </button>
-        <button
-          onClick={() => {
-            setZoom(1);
-            // Reset to center of wall (500 feet)
-            const centerX = -WALL_CENTER_X + containerSize.width / 2;
-            const centerY = -wallHeight / 2 + containerSize.height / 2;
-            setPosition({ x: centerX, y: centerY });
-          }}
-          className="w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-sm font-medium text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target"
-          aria-label="Reset view"
-        >
-          Reset
-        </button>
-      </div>
+        Reset
+      </button>
 
       {/* Current zoom level indicator */}
       <div
