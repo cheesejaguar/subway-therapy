@@ -11,9 +11,9 @@ import {
 } from "@/lib/storage";
 import {
   getOrCreateSessionId,
-  setSessionCookie,
+  getSessionCookieConfig,
   canUserPostNote,
-  recordNoteSubmission,
+  getNoteSubmissionCookieConfig,
 } from "@/lib/session";
 import { uploadNoteImage } from "@/lib/blob";
 import { StickyNote, CreateNoteRequest, ViewportBounds, ConvexNote, mapConvexNote, WALL_CONFIG, getMaxOverlapWithNotes, MAX_OVERLAP_PERCENTAGE } from "@/lib/types";
@@ -245,12 +245,6 @@ export async function POST(request: NextRequest) {
       await createNoteInMemory(note);
     }
 
-    // Record that this session has posted
-    await recordNoteSubmission();
-
-    // Set session cookie
-    await setSessionCookie(sessionId);
-
     // Generate appropriate message based on moderation status
     let message: string;
     if (moderationStatus === "approved") {
@@ -261,7 +255,8 @@ export async function POST(request: NextRequest) {
       message = "Note posted! It will be visible to others after moderation.";
     }
 
-    return NextResponse.json({
+    // Create response and set cookies on it
+    const response = NextResponse.json({
       success: true,
       note: {
         id: noteId,
@@ -272,6 +267,16 @@ export async function POST(request: NextRequest) {
       },
       message,
     });
+
+    // Set session cookie on response
+    const sessionCookie = getSessionCookieConfig(sessionId);
+    response.cookies.set(sessionCookie.name, sessionCookie.value, sessionCookie.options);
+
+    // Record note submission cookie on response
+    const submissionCookie = getNoteSubmissionCookieConfig();
+    response.cookies.set(submissionCookie.name, submissionCookie.value, submissionCookie.options);
+
+    return response;
   } catch (error) {
     console.error("Error creating note:", error);
     return NextResponse.json(

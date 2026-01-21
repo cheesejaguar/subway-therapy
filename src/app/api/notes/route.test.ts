@@ -24,9 +24,17 @@ vi.mock("@/lib/convex", () => ({
 
 vi.mock("@/lib/session", () => ({
   getOrCreateSessionId: vi.fn(),
-  setSessionCookie: vi.fn(),
+  getSessionCookieConfig: vi.fn(() => ({
+    name: "session_id",
+    value: "test-session",
+    options: { httpOnly: true, secure: false, sameSite: "lax", maxAge: 31536000, path: "/" },
+  })),
   canUserPostNote: vi.fn(),
-  recordNoteSubmission: vi.fn(),
+  getNoteSubmissionCookieConfig: vi.fn(() => ({
+    name: "last_note_time",
+    value: new Date().toISOString(),
+    options: { httpOnly: true, secure: false, sameSite: "lax", maxAge: 86400, path: "/" },
+  })),
 }));
 
 vi.mock("@/lib/blob", () => ({
@@ -176,8 +184,7 @@ describe("POST /api/notes", () => {
     vi.mocked(convex.isConvexConfigured).mockReturnValue(false);
     vi.mocked(session.canUserPostNote).mockResolvedValue({ canPost: true });
     vi.mocked(session.getOrCreateSessionId).mockResolvedValue("test-session");
-    vi.mocked(session.setSessionCookie).mockResolvedValue(undefined);
-    vi.mocked(session.recordNoteSubmission).mockResolvedValue(undefined);
+    // getSessionCookieConfig and getNoteSubmissionCookieConfig are already mocked in vi.mock setup
     vi.mocked(blob.uploadNoteImage).mockResolvedValue("https://blob.test/image.png");
     vi.mocked(storage.findAvailablePosition).mockReturnValue({ x: 300000, y: 1000 });
     vi.mocked(storage.getAllNotes).mockResolvedValue([]); // No existing notes for overlap check
