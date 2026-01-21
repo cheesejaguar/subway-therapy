@@ -97,7 +97,7 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
-      document.removeEventListener("touchmove", handleTouchMoveDoc, { passive: false });
+      document.removeEventListener("touchmove", handleTouchMoveDoc);
       document.removeEventListener("touchend", handleTouchEndDoc);
       document.removeEventListener("touchcancel", handleTouchEndDoc);
     };
