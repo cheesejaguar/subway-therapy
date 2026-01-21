@@ -166,12 +166,12 @@ export async function POST(request: NextRequest) {
 
     // Find position for the note
     const position =
-      body.x !== undefined && body.y !== undefined
+      body.x != null && body.y != null
         ? { x: body.x, y: body.y }
         : findAvailablePosition();
 
     // Validate overlap if user provided specific coordinates
-    if (body.x !== undefined && body.y !== undefined) {
+    if (body.x != null && body.y != null) {
       // Get nearby notes to check overlap
       const checkBounds: ViewportBounds = {
         minX: position.x - WALL_CONFIG.noteWidth * 2,

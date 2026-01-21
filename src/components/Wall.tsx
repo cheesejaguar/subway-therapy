@@ -190,7 +190,9 @@ export default function Wall({
         // Handle tap for note placement on mouse
         if (tap && isPlacingNote && touches === 0) {
           const mouseEvent = event as MouseEvent;
-          handleTouchTap(mouseEvent.clientX, mouseEvent.clientY);
+          if (typeof mouseEvent.clientX === 'number' && typeof mouseEvent.clientY === 'number') {
+            handleTouchTap(mouseEvent.clientX, mouseEvent.clientY);
+          }
           return memo;
         }
 
@@ -206,7 +208,9 @@ export default function Wall({
             }
           } else {
             const mouseEvent = event as MouseEvent;
-            updateGhostPosition(mouseEvent.clientX, mouseEvent.clientY);
+            if (typeof mouseEvent.clientX === 'number' && typeof mouseEvent.clientY === 'number') {
+              updateGhostPosition(mouseEvent.clientX, mouseEvent.clientY);
+            }
           }
           return memo;
         }
