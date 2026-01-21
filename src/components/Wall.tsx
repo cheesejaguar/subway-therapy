@@ -325,6 +325,15 @@ export default function Wall({
     return () => container.removeEventListener("wheel", handleWheel);
   }, []);
 
+  // Handle reset view - used by button click, touch, and keyboard
+  const handleResetView = useCallback(() => {
+    setZoom(1);
+    // Reset to center of wall (500 feet)
+    const centerX = -WALL_CENTER_X + containerSize.width / 2;
+    const centerY = -wallHeight / 2 + containerSize.height / 2;
+    setPosition({ x: centerX, y: centerY });
+  }, [containerSize, wallHeight]);
+
   // Keyboard navigation
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -360,16 +369,11 @@ export default function Wall({
           break;
         case "0":
           e.preventDefault();
-          setZoom(1);
-          // Reset to center of wall (500 feet)
-          setPosition({
-            x: -WALL_CENTER_X + containerSize.width / 2,
-            y: -wallHeight / 2 + containerSize.height / 2,
-          });
+          handleResetView();
           break;
       }
     },
-    [containerSize, wallHeight]
+    [handleResetView]
   );
 
   // Get current viewport bounds
@@ -520,19 +524,17 @@ export default function Wall({
 
       {/* Reset button - positioned above safe area */}
       <button
-        onClick={() => {
-          setZoom(1);
-          // Reset to center of wall (500 feet)
-          const centerX = -WALL_CENTER_X + containerSize.width / 2;
-          const centerY = -wallHeight / 2 + containerSize.height / 2;
-          setPosition({ x: centerX, y: centerY });
-        }}
+        onClick={handleResetView}
         className="absolute right-4 w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-sm font-medium text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target z-20"
         style={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))" }}
         aria-label="Reset view"
         onTouchStart={(e) => e.stopPropagation()}
         onTouchMove={(e) => e.stopPropagation()}
-        onTouchEnd={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          handleResetView();
+        }}
       >
         Reset
       </button>
