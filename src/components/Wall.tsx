@@ -175,20 +175,18 @@ export default function Wall({
         // Skip if pinching (pinch handles its own movement)
         if (pinching) return memo;
 
-        // Handle tap for note placement on touch
-        if (tap && isPlacingNote && touches > 0) {
+        // Handle tap for note placement (works for both touch and mouse)
+        if (tap && isPlacingNote) {
+          // Try touch event first (changedTouches contains the lifted finger)
           const touchEvent = event as TouchEvent;
           if (touchEvent.changedTouches?.[0]) {
             handleTouchTap(
               touchEvent.changedTouches[0].clientX,
               touchEvent.changedTouches[0].clientY
             );
+            return memo;
           }
-          return memo;
-        }
-
-        // Handle tap for note placement on mouse
-        if (tap && isPlacingNote && touches === 0) {
+          // Fall back to mouse event
           const mouseEvent = event as MouseEvent;
           if (typeof mouseEvent.clientX === 'number' && typeof mouseEvent.clientY === 'number') {
             handleTouchTap(mouseEvent.clientX, mouseEvent.clientY);
