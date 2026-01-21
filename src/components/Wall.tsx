@@ -187,6 +187,13 @@ export default function Wall({
           return memo;
         }
 
+        // Handle tap for note placement on mouse
+        if (tap && isPlacingNote && touches === 0) {
+          const mouseEvent = event as MouseEvent;
+          handleTouchTap(mouseEvent.clientX, mouseEvent.clientY);
+          return memo;
+        }
+
         // Handle note placement mode - update ghost position
         if (isPlacingNote) {
           if (touches > 0) {
