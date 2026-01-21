@@ -63,7 +63,7 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
     [scale, wallHeight, onNavigate]
   );
 
-  // Use document-level listeners for smooth dragging
+  // Use document-level listeners for smooth dragging (mouse and touch)
   React.useEffect(() => {
     if (!isDragging) return;
 
@@ -76,12 +76,30 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
       setIsDragging(false);
     };
 
+    const handleTouchMoveDoc = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      e.preventDefault();
+      e.stopPropagation();
+      navigateToPosition(e.touches[0].clientX);
+    };
+
+    const handleTouchEndDoc = () => {
+      setIsDragging(false);
+    };
+
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
+    // Use passive: false to allow preventDefault on touch events
+    document.addEventListener("touchmove", handleTouchMoveDoc, { passive: false });
+    document.addEventListener("touchend", handleTouchEndDoc);
+    document.addEventListener("touchcancel", handleTouchEndDoc);
 
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("touchmove", handleTouchMoveDoc);
+      document.removeEventListener("touchend", handleTouchEndDoc);
+      document.removeEventListener("touchcancel", handleTouchEndDoc);
     };
   }, [isDragging, navigateToPosition]);
 
@@ -94,29 +112,20 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
     [navigateToPosition]
   );
 
-  // Touch handlers
+  // Touch start handler - document-level listeners handle move/end
   const handleTouchStart = useCallback(
     (e: React.TouchEvent<HTMLDivElement>) => {
       if (e.touches.length === 1) {
+        // Stop propagation to prevent Wall's gesture handler from capturing this touch
+        e.stopPropagation();
+        // Prevent default to stop iOS from scrolling the page
+        e.preventDefault();
         setIsDragging(true);
         navigateToPosition(e.touches[0].clientX);
       }
     },
     [navigateToPosition]
   );
-
-  const handleTouchMove = useCallback(
-    (e: React.TouchEvent<HTMLDivElement>) => {
-      if (!isDragging || e.touches.length !== 1) return;
-      e.preventDefault();
-      navigateToPosition(e.touches[0].clientX);
-    },
-    [isDragging, navigateToPosition]
-  );
-
-  const handleTouchEnd = useCallback(() => {
-    setIsDragging(false);
-  }, []);
 
   // Calculate position in feet for display
   const currentFeet = Math.round(
@@ -148,8 +157,6 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
         style={{ width: sliderWidth, height: sliderHeight }}
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
         role="slider"
         aria-label="Wall position slider"
         aria-valuemin={0}
