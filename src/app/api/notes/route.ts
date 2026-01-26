@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { v4 as uuidv4 } from "uuid";
 import { api } from "../../../../convex/_generated/api";
 import { getConvexClient, isConvexConfigured } from "@/lib/convex";
 import {
@@ -123,7 +122,7 @@ export async function POST(request: NextRequest) {
     const sessionId = await getOrCreateSessionId();
 
     // Generate note ID
-    const noteId = uuidv4();
+    const noteId = crypto.randomUUID();
 
     // Upload image to blob storage
     let imageUrl: string;
