@@ -45,9 +45,12 @@ vi.mock("@/lib/moderation", () => ({
   moderateImage: vi.fn(),
 }));
 
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "test-uuid-1234"),
-}));
+// Mock crypto.randomUUID for consistent test IDs
+const mockRandomUUID = vi.fn(() => "test-uuid-1234");
+vi.stubGlobal("crypto", {
+  ...globalThis.crypto,
+  randomUUID: mockRandomUUID,
+});
 
 describe("GET /api/notes", () => {
   beforeEach(() => {

@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import type { ResponseCookie } from "next/dist/compiled/@edge-runtime/cookies";
 import { SESSION_COOKIE_NAME, LAST_NOTE_COOKIE_NAME } from "./types";
-import { v4 as uuidv4 } from "uuid";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ONE_YEAR_MS = 365 * ONE_DAY_MS;
@@ -11,7 +10,7 @@ export async function getOrCreateSessionId(): Promise<string> {
   let sessionId = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 
   if (!sessionId) {
-    sessionId = uuidv4();
+    sessionId = crypto.randomUUID();
   }
 
   return sessionId;
