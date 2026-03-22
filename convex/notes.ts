@@ -1,19 +1,28 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, query } from "./_generated/server";
 
-// Get all public notes (approved + pending, for public wall)
+const moderationStatus = v.union(
+  v.literal("pending"),
+  v.literal("approved"),
+  v.literal("rejected"),
+  v.literal("flagged")
+);
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const FLAG_THRESHOLD = 3;
+
+// Public query: only approved notes are visible on the public wall.
 export const getPublicNotes = query({
   args: {},
   handler: async (ctx) => {
-    const allNotes = await ctx.db.query("notes").collect();
-    // Return approved and pending notes (pending shown with placeholder)
-    return allNotes.filter(
-      (note) => note.moderationStatus === "approved" || note.moderationStatus === "pending"
-    );
+    return await ctx.db
+      .query("notes")
+      .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "approved"))
+      .collect();
   },
 });
 
-// Get notes in viewport (for lazy loading)
+// Public query: viewport fetch, restricted to approved notes.
 export const getNotesInViewport = query({
   args: {
     minX: v.number(),
@@ -23,12 +32,13 @@ export const getNotesInViewport = query({
   },
   handler: async (ctx, args) => {
     const padding = 200;
-    const allNotes = await ctx.db.query("notes").collect();
+    const approvedNotes = await ctx.db
+      .query("notes")
+      .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "approved"))
+      .collect();
 
-    // Filter to approved + pending, within viewport
-    return allNotes.filter(
+    return approvedNotes.filter(
       (note) =>
-        (note.moderationStatus === "approved" || note.moderationStatus === "pending") &&
         note.x >= args.minX - padding &&
         note.x <= args.maxX + padding &&
         note.y >= args.minY - padding &&
@@ -37,10 +47,10 @@ export const getNotesInViewport = query({
   },
 });
 
-// Get all notes for moderation
-export const getNotesForModeration = query({
+// Internal query: moderation dashboard listing.
+export const getNotesForModeration = internalQuery({
   args: {
-    status: v.optional(v.string()),
+    status: v.optional(moderationStatus),
   },
   handler: async (ctx, args) => {
     let notes;
@@ -53,67 +63,52 @@ export const getNotesForModeration = query({
       notes = await ctx.db.query("notes").collect();
     }
 
-    // Sort by creation date
     return notes.sort((a, b) => {
       const dateA = new Date(a.createdAt).getTime();
       const dateB = new Date(b.createdAt).getTime();
       if (args.status === "pending" || args.status === "flagged") {
-        return dateB - dateA; // Newest first
+        return dateB - dateA;
       }
       return dateA - dateB;
     });
   },
 });
 
-// Get note by visible ID
-export const getNoteByVisibleId = query({
-  args: { visibleId: v.string() },
-  handler: async (ctx, args) => {
-    const notes = await ctx.db
-      .query("notes")
-      .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
-      .collect();
-    return notes[0] || null;
-  },
-});
-
-// Get stats for admin dashboard
-export const getStats = query({
+// Internal query: moderation dashboard stats.
+export const getStats = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const allNotes = await ctx.db.query("notes").collect();
+    const [pending, approved, rejected, flagged] = await Promise.all([
+      ctx.db
+        .query("notes")
+        .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "pending"))
+        .collect(),
+      ctx.db
+        .query("notes")
+        .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "approved"))
+        .collect(),
+      ctx.db
+        .query("notes")
+        .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "rejected"))
+        .collect(),
+      ctx.db
+        .query("notes")
+        .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "flagged"))
+        .collect(),
+    ]);
 
-    const stats = {
-      total: allNotes.length,
-      pending: 0,
-      approved: 0,
-      rejected: 0,
-      flagged: 0,
+    return {
+      total: pending.length + approved.length + rejected.length + flagged.length,
+      pending: pending.length,
+      approved: approved.length,
+      rejected: rejected.length,
+      flagged: flagged.length,
     };
-
-    for (const note of allNotes) {
-      switch (note.moderationStatus) {
-        case "pending":
-          stats.pending++;
-          break;
-        case "approved":
-          stats.approved++;
-          break;
-        case "rejected":
-          stats.rejected++;
-          break;
-        case "flagged":
-          stats.flagged++;
-          break;
-      }
-    }
-
-    return stats;
   },
 });
 
-// Create a new note
-export const createNote = mutation({
+// Internal mutation: create a note.
+export const createNote = internalMutation({
   args: {
     visibleId: v.string(),
     imageUrl: v.string(),
@@ -122,7 +117,7 @@ export const createNote = mutation({
     y: v.number(),
     rotation: v.number(),
     createdAt: v.string(),
-    moderationStatus: v.string(),
+    moderationStatus,
     flagCount: v.number(),
     sessionId: v.string(),
   },
@@ -132,11 +127,11 @@ export const createNote = mutation({
   },
 });
 
-// Update note moderation status
-export const moderateNote = mutation({
+// Internal mutation: update moderation status.
+export const moderateNote = internalMutation({
   args: {
     visibleId: v.string(),
-    status: v.string(),
+    status: moderationStatus,
   },
   handler: async (ctx, args) => {
     const notes = await ctx.db
@@ -151,10 +146,11 @@ export const moderateNote = mutation({
   },
 });
 
-// Flag a note
-export const flagNote = mutation({
+// Internal mutation: flag note with per-reporter dedupe.
+export const flagNote = internalMutation({
   args: {
     visibleId: v.string(),
+    reporterHash: v.string(),
   },
   handler: async (ctx, args) => {
     const notes = await ctx.db
@@ -165,23 +161,39 @@ export const flagNote = mutation({
     if (notes.length === 0) return null;
 
     const note = notes[0];
+    const existingFlags = await ctx.db
+      .query("flags")
+      .withIndex("by_visibleId_reporterHash", (q) =>
+        q.eq("visibleId", args.visibleId).eq("reporterHash", args.reporterHash)
+      )
+      .collect();
+
+    if (existingFlags.length > 0) {
+      return { flagCount: note.flagCount, duplicate: true };
+    }
+
+    await ctx.db.insert("flags", {
+      visibleId: args.visibleId,
+      reporterHash: args.reporterHash,
+      createdAt: new Date().toISOString(),
+    });
+
     const newFlagCount = note.flagCount + 1;
-    const updates: { flagCount: number; moderationStatus?: string } = {
+    const updates: { flagCount: number; moderationStatus?: "flagged" } = {
       flagCount: newFlagCount,
     };
 
-    // Auto-hide if flagged multiple times
-    if (newFlagCount >= 3 && note.moderationStatus === "approved") {
+    if (newFlagCount >= FLAG_THRESHOLD && note.moderationStatus === "approved") {
       updates.moderationStatus = "flagged";
     }
 
     await ctx.db.patch(note._id, updates);
-    return { flagCount: newFlagCount };
+    return { flagCount: newFlagCount, duplicate: false };
   },
 });
 
-// Delete a note
-export const deleteNote = mutation({
+// Internal mutation: delete a note and related flag records.
+export const deleteNote = internalMutation({
   args: {
     visibleId: v.string(),
   },
@@ -191,9 +203,78 @@ export const deleteNote = mutation({
       .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
       .collect();
 
-    if (notes.length === 0) return { success: false };
+    if (notes.length === 0) return { success: false as const };
 
-    await ctx.db.delete(notes[0]._id);
-    return { success: true, imageUrl: notes[0].imageUrl };
+    const note = notes[0];
+    await ctx.db.delete(note._id);
+
+    const flags = await ctx.db
+      .query("flags")
+      .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
+      .collect();
+    await Promise.all(flags.map((flag) => ctx.db.delete(flag._id)));
+
+    return { success: true as const, imageUrl: note.imageUrl };
+  },
+});
+
+// Internal query: post cooldown in milliseconds for a reporter.
+export const getSubmissionCooldown = internalQuery({
+  args: {
+    reporterHash: v.string(),
+    nowMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const submissions = await ctx.db
+      .query("submissions")
+      .withIndex("by_reporterHash_createdAt", (q) => q.eq("reporterHash", args.reporterHash))
+      .collect();
+
+    if (submissions.length === 0) {
+      return { timeUntilNextPostMs: 0 };
+    }
+
+    let latestTimestamp = 0;
+    for (const submission of submissions) {
+      const ts = new Date(submission.createdAt).getTime();
+      if (ts > latestTimestamp) latestTimestamp = ts;
+    }
+
+    if (!latestTimestamp) {
+      return { timeUntilNextPostMs: 0 };
+    }
+
+    const elapsed = args.nowMs - latestTimestamp;
+    const remaining = ONE_DAY_MS - elapsed;
+
+    return {
+      timeUntilNextPostMs: Math.max(0, remaining),
+    };
+  },
+});
+
+// Internal mutation: record successful note submission and prune stale history.
+export const recordSubmission = internalMutation({
+  args: {
+    reporterHash: v.string(),
+    createdAt: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("submissions", {
+      reporterHash: args.reporterHash,
+      createdAt: args.createdAt,
+    });
+
+    const allSubmissions = await ctx.db
+      .query("submissions")
+      .withIndex("by_reporterHash_createdAt", (q) => q.eq("reporterHash", args.reporterHash))
+      .collect();
+
+    const cutoff = Date.now() - ONE_DAY_MS * 7;
+    await Promise.all(
+      allSubmissions
+        .filter((submission) => new Date(submission.createdAt).getTime() < cutoff)
+        .map((submission) => ctx.db.delete(submission._id))
+    );
   },
 });

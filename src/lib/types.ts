@@ -22,7 +22,7 @@ export interface StickyNote {
   createdAt: string;
   moderationStatus: ModerationStatus;
   flagCount: number;
-  sessionId: string;
+  sessionId?: string;
 }
 
 export interface CreateNoteRequest {
@@ -92,7 +92,7 @@ export interface ConvexNote {
   createdAt: string;
   moderationStatus: string;
   flagCount: number;
-  sessionId: string;
+  sessionId?: string;
 }
 
 // Helper to convert Convex note to StickyNote
@@ -109,4 +109,12 @@ export function mapConvexNote(note: ConvexNote): StickyNote {
     flagCount: note.flagCount,
     sessionId: note.sessionId,
   };
+}
+
+export type PublicStickyNote = Omit<StickyNote, "sessionId">;
+
+export function toPublicStickyNote(note: StickyNote): PublicStickyNote {
+  const publicNote = { ...note } as StickyNote;
+  delete publicNote.sessionId;
+  return publicNote;
 }

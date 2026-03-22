@@ -217,7 +217,7 @@ describe("storage", () => {
       expect(result.map((n) => n.id)).toContain("padding-test");
     });
 
-    it("should only return approved and pending notes", async () => {
+    it("should only return approved notes", async () => {
       const approved = createTestNote({ id: "approved-1", x: 500, y: 500, moderationStatus: "approved" });
       const pending = createTestNote({ id: "pending-1", x: 500, y: 500, moderationStatus: "pending" });
       const rejected = createTestNote({ id: "rejected-1", x: 500, y: 500, moderationStatus: "rejected" });
@@ -235,9 +235,9 @@ describe("storage", () => {
         maxY: 1000,
       });
 
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(1);
       expect(result.map((n) => n.id)).toContain("approved-1");
-      expect(result.map((n) => n.id)).toContain("pending-1");
+      expect(result.map((n) => n.id)).not.toContain("pending-1");
     });
   });
 
@@ -317,9 +317,10 @@ describe("storage", () => {
       const note = createTestNote({ id: "flag-1", flagCount: 0 });
       await createNote(note);
 
-      const result = await flagNote(note.id);
+      const result = await flagNote(note.id, "reporter-1");
 
-      expect(result?.flagCount).toBe(1);
+      expect(result.duplicate).toBe(false);
+      expect(result.note?.flagCount).toBe(1);
     });
 
     it("should auto-hide after 3 flags", async () => {
@@ -330,10 +331,10 @@ describe("storage", () => {
       });
       await createNote(note);
 
-      const result = await flagNote(note.id);
+      const result = await flagNote(note.id, "reporter-1");
 
-      expect(result?.flagCount).toBe(3);
-      expect(result?.moderationStatus).toBe("flagged");
+      expect(result.note?.flagCount).toBe(3);
+      expect(result.note?.moderationStatus).toBe("flagged");
     });
 
     it("should not auto-hide non-approved notes", async () => {
@@ -344,15 +345,28 @@ describe("storage", () => {
       });
       await createNote(note);
 
-      const result = await flagNote(note.id);
+      const result = await flagNote(note.id, "reporter-1");
 
-      expect(result?.flagCount).toBe(3);
-      expect(result?.moderationStatus).toBe("pending"); // Unchanged
+      expect(result.note?.flagCount).toBe(3);
+      expect(result.note?.moderationStatus).toBe("pending"); // Unchanged
     });
 
-    it("should return null for non-existent note", async () => {
-      const result = await flagNote("non-existent");
-      expect(result).toBeNull();
+    it("should dedupe flags from the same reporter", async () => {
+      const note = createTestNote({ id: "flag-4", flagCount: 1 });
+      await createNote(note);
+
+      const first = await flagNote(note.id, "reporter-1");
+      const second = await flagNote(note.id, "reporter-1");
+
+      expect(first.duplicate).toBe(false);
+      expect(second.duplicate).toBe(true);
+      expect(second.note?.flagCount).toBe(2);
+    });
+
+    it("should return null note for non-existent note", async () => {
+      const result = await flagNote("non-existent", "reporter-1");
+      expect(result.note).toBeNull();
+      expect(result.duplicate).toBe(false);
     });
   });
 

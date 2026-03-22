@@ -53,7 +53,7 @@ export const metadata: Metadata = {
     description: "Leave a note on the virtual subway wall. Share your thoughts with the world.",
     images: [
       {
-        url: "/og-image.png",
+        url: "/og-image.svg",
         width: 1200,
         height: 630,
         alt: "Subway Therapy - Virtual sticky note wall",
@@ -64,13 +64,13 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Subway Therapy",
     description: "Leave a note on the virtual subway wall. Share your thoughts with the world.",
-    images: ["/og-image.png"],
+    images: ["/og-image.svg"],
     creator: "@subwaytherapy",
   },
   icons: {
     icon: "/favicon.ico",
-    shortcut: "/favicon-16x16.png",
-    apple: "/apple-touch-icon.png",
+    shortcut: "/favicon.ico",
+    apple: "/favicon.ico",
   },
   manifest: "/site.webmanifest",
   alternates: {

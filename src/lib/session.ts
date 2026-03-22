@@ -1,9 +1,22 @@
 import { cookies } from "next/headers";
 import { SESSION_COOKIE_NAME, LAST_NOTE_COOKIE_NAME } from "./types";
 import { v4 as uuidv4 } from "uuid";
+import { getReporterHashes } from "./abuse";
+import { getConvexAdminClient, isConvexAdminConfigured } from "./convex";
+import { internal } from "../../convex/_generated/api";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ONE_YEAR_MS = 365 * ONE_DAY_MS;
+const reporterLastSubmission: Map<string, number> = new Map();
+
+function pruneReporterSubmissionCache(nowMs: number): void {
+  const staleThreshold = nowMs - ONE_DAY_MS * 7;
+  for (const [reporterHash, lastSubmissionMs] of reporterLastSubmission.entries()) {
+    if (lastSubmissionMs < staleThreshold) {
+      reporterLastSubmission.delete(reporterHash);
+    }
+  }
+}
 
 export async function getOrCreateSessionId(): Promise<string> {
   const cookieStore = await cookies();
@@ -33,18 +46,50 @@ export async function canUserPostNote(): Promise<{
   timeUntilNextPost?: number;
 }> {
   const cookieStore = await cookies();
+  const sessionId = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   const lastNoteTime = cookieStore.get(LAST_NOTE_COOKIE_NAME)?.value;
+  const nowMs = Date.now();
+  pruneReporterSubmissionCache(nowMs);
+  const cooldownCandidates: number[] = [];
 
-  if (!lastNoteTime) {
-    return { canPost: true };
+  if (lastNoteTime) {
+    const lastNoteDate = new Date(lastNoteTime);
+    const cookieElapsed = nowMs - lastNoteDate.getTime();
+    if (cookieElapsed < ONE_DAY_MS) {
+      cooldownCandidates.push(ONE_DAY_MS - cookieElapsed);
+    }
   }
 
-  const lastNoteDate = new Date(lastNoteTime);
-  const now = new Date();
-  const timeSinceLastNote = now.getTime() - lastNoteDate.getTime();
+  const { dailyReporterHash } = await getReporterHashes(sessionId);
 
-  if (timeSinceLastNote < ONE_DAY_MS) {
-    const timeUntilNextPost = ONE_DAY_MS - timeSinceLastNote;
+  if (isConvexAdminConfigured()) {
+    try {
+      const convex = getConvexAdminClient();
+      const result = await convex.query<{ timeUntilNextPostMs: number }>(
+        internal.notes.getSubmissionCooldown,
+        {
+          reporterHash: dailyReporterHash,
+          nowMs,
+        }
+      );
+      if (result.timeUntilNextPostMs > 0) {
+        cooldownCandidates.push(result.timeUntilNextPostMs);
+      }
+    } catch (error) {
+      console.error("Error checking submission cooldown in Convex:", error);
+    }
+  } else {
+    const lastSubmissionMs = reporterLastSubmission.get(dailyReporterHash);
+    if (lastSubmissionMs) {
+      const elapsed = nowMs - lastSubmissionMs;
+      if (elapsed < ONE_DAY_MS) {
+        cooldownCandidates.push(ONE_DAY_MS - elapsed);
+      }
+    }
+  }
+
+  const timeUntilNextPost = Math.max(0, ...cooldownCandidates);
+  if (timeUntilNextPost > 0) {
     return {
       canPost: false,
       reason: "Only one note per person per day!",
@@ -57,13 +102,32 @@ export async function canUserPostNote(): Promise<{
 
 export async function recordNoteSubmission(): Promise<void> {
   const cookieStore = await cookies();
-  cookieStore.set(LAST_NOTE_COOKIE_NAME, new Date().toISOString(), {
+  const sessionId = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  const timestampIso = new Date().toISOString();
+  const timestampMs = Date.parse(timestampIso);
+  pruneReporterSubmissionCache(timestampMs);
+  cookieStore.set(LAST_NOTE_COOKIE_NAME, timestampIso, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     maxAge: ONE_DAY_MS / 1000,
     path: "/",
   });
+
+  const { dailyReporterHash } = await getReporterHashes(sessionId);
+  reporterLastSubmission.set(dailyReporterHash, timestampMs);
+
+  if (isConvexAdminConfigured()) {
+    try {
+      const convex = getConvexAdminClient();
+      await convex.mutation<null>(internal.notes.recordSubmission, {
+        reporterHash: dailyReporterHash,
+        createdAt: timestampIso,
+      });
+    } catch (error) {
+      console.error("Error recording submission in Convex:", error);
+    }
+  }
 }
 
 export function formatTimeRemaining(ms: number): string {
@@ -74,4 +138,9 @@ export function formatTimeRemaining(ms: number): string {
     return `${hours}h ${minutes}m`;
   }
   return `${minutes}m`;
+}
+
+export async function getReporterHash(sessionId?: string): Promise<string> {
+  const { dailyReporterHash } = await getReporterHashes(sessionId);
+  return dailyReporterHash;
 }

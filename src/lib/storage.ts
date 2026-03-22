@@ -4,6 +4,7 @@ import { deleteNoteImage } from "./blob";
 // In-memory storage for development (replace with database in production)
 // This simulates what would be stored in Vercel Edge Config / KV
 const notesStore: Map<string, StickyNote> = new Map();
+const noteFlaggers: Map<string, Set<string>> = new Map();
 
 // Blocklist for automated moderation
 const BLOCKLIST_WORDS: string[] = [
@@ -59,6 +60,7 @@ export async function deleteNote(id: string): Promise<boolean> {
     await deleteNoteImage(note.imageUrl);
   }
 
+  noteFlaggers.delete(id);
   return notesStore.delete(id);
 }
 
@@ -68,8 +70,8 @@ export async function getNotesInViewport(
   const notes: StickyNote[] = [];
 
   for (const note of notesStore.values()) {
-    // Return approved and pending notes for public view
-    if (note.moderationStatus !== "approved" && note.moderationStatus !== "pending") continue;
+    // Public wall only shows approved notes.
+    if (note.moderationStatus !== "approved") continue;
 
     // Check if note is within viewport bounds (with some padding)
     const padding = 200;
@@ -112,9 +114,20 @@ export async function getNotesForModeration(
   });
 }
 
-export async function flagNote(id: string): Promise<StickyNote | null> {
+export async function flagNote(
+  id: string,
+  reporterHash: string
+): Promise<{ note: StickyNote | null; duplicate: boolean }> {
   const note = notesStore.get(id);
-  if (!note) return null;
+  if (!note) return { note: null, duplicate: false };
+
+  const reporters = noteFlaggers.get(id) ?? new Set<string>();
+  if (reporters.has(reporterHash)) {
+    noteFlaggers.set(id, reporters);
+    return { note, duplicate: true };
+  }
+  reporters.add(reporterHash);
+  noteFlaggers.set(id, reporters);
 
   const newFlagCount = note.flagCount + 1;
   const updates: Partial<StickyNote> = {
@@ -126,7 +139,8 @@ export async function flagNote(id: string): Promise<StickyNote | null> {
     updates.moderationStatus = "flagged";
   }
 
-  return updateNote(id, updates);
+  const updatedNote = await updateNote(id, updates);
+  return { note: updatedNote, duplicate: false };
 }
 
 export async function moderateNote(
