@@ -1,5 +1,12 @@
 import { put, del } from "@vercel/blob";
 
+const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const EXT_BY_MIME: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpeg",
+  "image/webp": "webp",
+};
+
 /**
  * Upload an image to Vercel Blob storage
  * @param base64Data - Base64 encoded image data (with data:image/... prefix)
@@ -26,11 +33,15 @@ export async function uploadNoteImage(
     const mimeType = matches[1];
     const base64Content = matches[2];
 
+    if (!ALLOWED_MIME_TYPES.has(mimeType.toLowerCase())) {
+      throw new Error("Unsupported image MIME type");
+    }
+
     // Convert base64 to buffer
     const buffer = Buffer.from(base64Content, "base64");
 
     // Determine file extension
-    const ext = mimeType.split("/")[1] || "png";
+    const ext = EXT_BY_MIME[mimeType.toLowerCase()] || "png";
     const filename = `notes/${noteId}.${ext}`;
 
     // Upload to Vercel Blob
