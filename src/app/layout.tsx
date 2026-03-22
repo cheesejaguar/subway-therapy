@@ -1,11 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://subwaytherapy.net";
 
@@ -84,6 +78,7 @@ export const viewport: Viewport = {
   maximumScale: 5,
   userScalable: true,
   viewportFit: "cover",
+  themeColor: "#1C1C1C",
 };
 
 // JSON-LD structured data for SEO
@@ -120,7 +115,7 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         />
       </head>
-      <body className={`${inter.variable} font-sans antialiased`}>
+      <body className="antialiased">
         {children}
       </body>
     </html>

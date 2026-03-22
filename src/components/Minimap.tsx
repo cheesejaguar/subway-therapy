@@ -4,23 +4,14 @@ import React, { useCallback, useRef, useState } from "react";
 import { WALL_CONFIG, ViewportBounds } from "@/lib/types";
 
 // Official MTA subway line colors
-const MTA_COLORS = {
-  red: "#EE352E",    // 1, 2, 3
-  orange: "#FF6319", // F, M
-  gray: "#A7A9AC",   // L
-};
-
-// Subway bullet component
-function SubwayBullet({ line, color }: { line: string; color: string }) {
-  return (
-    <div
-      className="w-5 h-5 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
-      style={{ backgroundColor: color }}
-    >
-      {line}
-    </div>
-  );
-}
+const MTA_LINES = [
+  { line: "1", color: "#EE352E" },
+  { line: "2", color: "#EE352E" },
+  { line: "3", color: "#EE352E" },
+  { line: "F", color: "#FF6319" },
+  { line: "M", color: "#FF6319" },
+  { line: "L", color: "#808183" },
+] as const;
 
 interface MinimapProps {
   viewportBounds: ViewportBounds;
@@ -32,14 +23,10 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
   const sliderRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Slider dimensions
-  const sliderWidth = 200;
-  const sliderHeight = 24;
-
-  // Scale factor from wall coordinates to slider coordinates
+  const sliderWidth = 220;
+  const sliderHeight = 28;
   const scale = sliderWidth / wallWidth;
 
-  // Calculate viewport indicator position and size
   const viewportX = Math.max(0, Math.min(sliderWidth, viewportBounds.minX * scale));
   const viewportW = Math.max(
     8,
@@ -52,18 +39,13 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
       if (!rect) return;
 
       const clickX = Math.max(0, Math.min(sliderWidth, clientX - rect.left));
-
-      // Convert slider coordinates to wall coordinates
       const wallX = clickX / scale;
-      // Keep Y centered
       const wallY = wallHeight / 2;
-
       onNavigate(wallX, wallY);
     },
     [scale, wallHeight, onNavigate]
   );
 
-  // Use document-level listeners for smooth dragging (mouse and touch)
   React.useEffect(() => {
     if (!isDragging) return;
 
@@ -72,9 +54,7 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
       navigateToPosition(e.clientX);
     };
 
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
+    const handleMouseUp = () => setIsDragging(false);
 
     const handleTouchMoveDoc = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
@@ -83,13 +63,10 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
       navigateToPosition(e.touches[0].clientX);
     };
 
-    const handleTouchEndDoc = () => {
-      setIsDragging(false);
-    };
+    const handleTouchEndDoc = () => setIsDragging(false);
 
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
-    // Use passive: false to allow preventDefault on touch events
     document.addEventListener("touchmove", handleTouchMoveDoc, { passive: false });
     document.addEventListener("touchend", handleTouchEndDoc);
     document.addEventListener("touchcancel", handleTouchEndDoc);
@@ -112,13 +89,10 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
     [navigateToPosition]
   );
 
-  // Touch start handler - document-level listeners handle move/end
   const handleTouchStart = useCallback(
     (e: React.TouchEvent<HTMLDivElement>) => {
       if (e.touches.length === 1) {
-        // Stop propagation to prevent Wall's gesture handler from capturing this touch
         e.stopPropagation();
-        // Prevent default to stop iOS from scrolling the page
         e.preventDefault();
         setIsDragging(true);
         navigateToPosition(e.touches[0].clientX);
@@ -127,32 +101,49 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
     [navigateToPosition]
   );
 
-  // Calculate position in feet for display
   const currentFeet = Math.round(
     ((viewportBounds.minX + viewportBounds.maxX) / 2) / (wallWidth / 1000)
   );
 
   return (
-    <div className="absolute top-4 left-4 bg-white rounded-lg shadow-lg p-3 z-20">
-      <div className="text-xs text-gray-600 mb-2 flex justify-between items-center">
+    <div className="absolute top-4 left-4 station-chrome rounded-lg p-3 z-20" style={{ minWidth: sliderWidth + 24 }}>
+      {/* MTA line bullets header */}
+      <div className="flex justify-between items-center mb-2">
         <div className="flex gap-0.5">
-          <SubwayBullet line="1" color={MTA_COLORS.red} />
-          <SubwayBullet line="2" color={MTA_COLORS.red} />
-          <SubwayBullet line="3" color={MTA_COLORS.red} />
+          {MTA_LINES.slice(0, 3).map((l) => (
+            <div
+              key={l.line}
+              className="mta-bullet-sm"
+              style={{ backgroundColor: l.color }}
+            >
+              {l.line}
+            </div>
+          ))}
         </div>
-        <span className="font-medium">{currentFeet} ft</span>
+        <span
+          className="text-white/80 text-xs tracking-wider"
+          style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}
+        >
+          {currentFeet} FT
+        </span>
         <div className="flex gap-0.5">
-          <SubwayBullet line="F" color={MTA_COLORS.orange} />
-          <SubwayBullet line="M" color={MTA_COLORS.orange} />
-          <SubwayBullet line="L" color={MTA_COLORS.gray} />
+          {MTA_LINES.slice(3).map((l) => (
+            <div
+              key={l.line}
+              className="mta-bullet-sm"
+              style={{ backgroundColor: l.color }}
+            >
+              {l.line}
+            </div>
+          ))}
         </div>
       </div>
+
+      {/* Slider track — subway map style */}
       <div
         ref={sliderRef}
-        className={`relative bg-[var(--tile-bg)] border rounded select-none ${
-          isDragging
-            ? "border-[var(--ui-primary)] cursor-grabbing"
-            : "border-gray-300 cursor-grab hover:border-gray-400"
+        className={`minimap-track rounded select-none ${
+          isDragging ? "cursor-grabbing" : "cursor-grab"
         }`}
         style={{ width: sliderWidth, height: sliderHeight }}
         onMouseDown={handleMouseDown}
@@ -163,18 +154,27 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
         aria-valuemax={1000}
         aria-valuenow={currentFeet}
       >
-        {/* Center marker (500 ft) */}
+        {/* Station dots along the line */}
+        {[0.1, 0.25, 0.5, 0.75, 0.9].map((pos) => (
+          <div
+            key={pos}
+            className="absolute top-1/2 w-2 h-2 rounded-full bg-white/40 -translate-y-1/2"
+            style={{ left: `${pos * 100}%`, marginLeft: -4 }}
+          />
+        ))}
+
+        {/* Center marker — transfer station */}
         <div
-          className="absolute w-0.5 h-full bg-gray-400/50"
-          style={{ left: sliderWidth / 2 }}
+          className="absolute top-1/2 w-2.5 h-2.5 rounded-full bg-white border-2 border-[var(--mta-green)] -translate-y-1/2"
+          style={{ left: sliderWidth / 2, marginLeft: -5 }}
         />
 
         {/* Viewport indicator / thumb */}
         <div
           className={`absolute top-0 h-full rounded-sm transition-colors ${
             isDragging
-              ? "border-2 border-[var(--ui-primary)] bg-[var(--ui-primary)]/50"
-              : "border-2 border-[var(--ui-primary)] bg-[var(--ui-primary)]/30 hover:bg-[var(--ui-primary)]/40"
+              ? "bg-[var(--mta-green)]/60 border-2 border-[var(--mta-green)]"
+              : "bg-[var(--mta-green)]/30 border-2 border-[var(--mta-green)]/70 hover:bg-[var(--mta-green)]/40"
           }`}
           style={{
             left: viewportX,
@@ -182,8 +182,15 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
           }}
         />
       </div>
-      <div className={`text-[10px] text-center mt-1 ${isDragging ? "text-[var(--ui-primary)] font-medium" : "text-gray-500"}`}>
-        {isDragging ? "Navigating..." : "Drag to navigate"}
+
+      {/* Status text */}
+      <div
+        className={`text-[10px] text-center mt-1.5 tracking-wider ${
+          isDragging ? "text-[var(--mta-green)]" : "text-white/40"
+        }`}
+        style={{ fontFamily: "var(--font-display)", fontWeight: 500 }}
+      >
+        {isDragging ? "NAVIGATING" : "DRAG TO NAVIGATE"}
       </div>
     </div>
   );

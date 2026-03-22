@@ -44,10 +44,8 @@ export default function NoteCreator({
   const [hasDrawn, setHasDrawn] = useState(false);
   const [brushSize, setBrushSize] = useState(3);
 
-  // Track previous note color to detect changes
   const prevNoteColorRef = useRef<NoteColor>(noteColor);
 
-  // Initialize canvas
   useEffect(() => {
     if (!isOpen || inputMode !== "draw") return;
 
@@ -57,18 +55,14 @@ export default function NoteCreator({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Set canvas size
     canvas.width = 300;
     canvas.height = 300;
 
-    // Clear and fill with note color
     ctx.fillStyle = NOTE_COLORS[noteColor];
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Reset drawing state when note color changes (tracked via ref to avoid setState in effect)
     if (prevNoteColorRef.current !== noteColor) {
       prevNoteColorRef.current = noteColor;
-      // Schedule state update outside the effect body
       queueMicrotask(() => setHasDrawn(false));
     }
   }, [isOpen, noteColor, inputMode]);
@@ -159,17 +153,14 @@ export default function NoteCreator({
     const ctx = canvas.getContext("2d");
     if (!ctx) return "";
 
-    // Fill background
     ctx.fillStyle = NOTE_COLORS[noteColor];
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw text
     ctx.fillStyle = INK_COLORS[inkColor];
-    ctx.font = "20px Arial, sans-serif";
+    ctx.font = "20px 'Barlow', 'Helvetica Neue', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    // Word wrap
     const maxWidth = 260;
     const lineHeight = 26;
     const words = text.split(" ");
@@ -191,7 +182,6 @@ export default function NoteCreator({
       lines.push(currentLine);
     }
 
-    // Center vertically
     const totalHeight = lines.length * lineHeight;
     const startY = (canvas.height - totalHeight) / 2 + lineHeight / 2;
 
@@ -225,20 +215,27 @@ export default function NoteCreator({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="note-creator-title"
     >
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <h2 id="note-creator-title" className="text-xl font-semibold text-gray-900">
+      <div
+        className="modal-card rounded-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+        style={{ animation: "slideUp 0.3s ease" }}
+      >
+        {/* Header — MTA sign style */}
+        <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between">
+          <h2
+            id="note-creator-title"
+            className="text-white text-lg tracking-wide"
+            style={{ fontFamily: "var(--font-display)", fontWeight: 700, textTransform: "uppercase" }}
+          >
             Create Your Note
           </h2>
           <button
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100"
+            className="w-8 h-8 flex items-center justify-center text-white/50 hover:text-white rounded-full hover:bg-white/10 transition-colors"
             aria-label="Close"
           >
             &times;
@@ -246,34 +243,38 @@ export default function NoteCreator({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6">
+        <div className="p-6 space-y-5">
           {!canPost ? (
             <div className="text-center py-8">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-yellow-100 flex items-center justify-center">
-                <span className="text-3xl">⏰</span>
+              <div className="mta-bullet-lg mx-auto mb-4" style={{ backgroundColor: "var(--mta-yellow)", width: 48, height: 48, fontSize: 24 }}>
+                !
               </div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
+              <h3
+                className="text-white/90 text-base mb-2"
+                style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}
+              >
                 {cantPostReason}
               </h3>
               {timeUntilNextPost && (
-                <p className="text-gray-600">
+                <p className="text-white/50 text-sm" style={{ fontFamily: "var(--font-body)" }}>
                   Come back in {timeUntilNextPost} to post again.
                 </p>
               )}
             </div>
           ) : (
             <>
-              {/* Mode toggle */}
-              <div className="flex rounded-lg bg-gray-100 p-1" role="tablist">
+              {/* Mode toggle — styled like MTA tab navigation */}
+              <div className="flex rounded-lg bg-white/5 p-1" role="tablist">
                 <button
                   role="tab"
                   aria-selected={inputMode === "draw"}
                   onClick={() => setInputMode("draw")}
-                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                  className={`flex-1 py-2 px-4 rounded-md text-sm transition-colors ${
                     inputMode === "draw"
-                      ? "bg-white shadow text-gray-900"
-                      : "text-gray-600 hover:text-gray-900"
+                      ? "bg-[var(--mta-green)] text-white shadow-lg"
+                      : "text-white/50 hover:text-white/80"
                   }`}
+                  style={{ fontFamily: "var(--font-display)", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}
                 >
                   Draw
                 </button>
@@ -281,11 +282,12 @@ export default function NoteCreator({
                   role="tab"
                   aria-selected={inputMode === "text"}
                   onClick={() => setInputMode("text")}
-                  className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${
+                  className={`flex-1 py-2 px-4 rounded-md text-sm transition-colors ${
                     inputMode === "text"
-                      ? "bg-white shadow text-gray-900"
-                      : "text-gray-600 hover:text-gray-900"
+                      ? "bg-[var(--mta-green)] text-white shadow-lg"
+                      : "text-white/50 hover:text-white/80"
                   }`}
+                  style={{ fontFamily: "var(--font-display)", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}
                 >
                   Type
                 </button>
@@ -293,7 +295,10 @@ export default function NoteCreator({
 
               {/* Note color selector */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label
+                  className="block text-[11px] text-white/40 mb-2 tracking-widest uppercase"
+                  style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}
+                >
                   Note Color
                 </label>
                 <div className="flex gap-2 flex-wrap" role="radiogroup" aria-label="Note color">
@@ -301,10 +306,10 @@ export default function NoteCreator({
                     <button
                       key={color}
                       onClick={() => setNoteColor(color)}
-                      className={`w-10 h-10 rounded-lg shadow-sm transition-transform ${
+                      className={`w-9 h-9 rounded-lg transition-all ${
                         noteColor === color
-                          ? "ring-2 ring-offset-2 ring-[var(--ui-primary)] scale-110"
-                          : "hover:scale-105"
+                          ? "ring-2 ring-offset-2 ring-offset-[#1E1E1E] ring-[var(--mta-yellow)] scale-110"
+                          : "hover:scale-105 opacity-80 hover:opacity-100"
                       }`}
                       style={{ backgroundColor: NOTE_COLORS[color] }}
                       role="radio"
@@ -317,7 +322,10 @@ export default function NoteCreator({
 
               {/* Ink color selector */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label
+                  className="block text-[11px] text-white/40 mb-2 tracking-widest uppercase"
+                  style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}
+                >
                   Ink Color
                 </label>
                 <div className="flex gap-2" role="radiogroup" aria-label="Ink color">
@@ -325,10 +333,10 @@ export default function NoteCreator({
                     <button
                       key={color}
                       onClick={() => setInkColor(color)}
-                      className={`w-10 h-10 rounded-lg shadow-sm transition-transform ${
+                      className={`w-9 h-9 rounded-lg transition-all ${
                         inkColor === color
-                          ? "ring-2 ring-offset-2 ring-[var(--ui-primary)] scale-110"
-                          : "hover:scale-105"
+                          ? "ring-2 ring-offset-2 ring-offset-[#1E1E1E] ring-[var(--mta-yellow)] scale-110"
+                          : "hover:scale-105 opacity-80 hover:opacity-100"
                       }`}
                       style={{ backgroundColor: INK_COLORS[color] }}
                       role="radio"
@@ -343,11 +351,14 @@ export default function NoteCreator({
               {inputMode === "draw" ? (
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">
+                    <label
+                      className="text-[11px] text-white/40 tracking-widest uppercase"
+                      style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}
+                    >
                       Draw your message
                     </label>
                     <div className="flex items-center gap-2">
-                      <label htmlFor="brush-size" className="text-xs text-gray-500">
+                      <label htmlFor="brush-size" className="text-[11px] text-white/30 uppercase tracking-wider" style={{ fontFamily: "var(--font-display)" }}>
                         Brush:
                       </label>
                       <input
@@ -357,12 +368,12 @@ export default function NoteCreator({
                         max="10"
                         value={brushSize}
                         onChange={(e) => setBrushSize(parseInt(e.target.value))}
-                        className="w-20"
+                        className="w-20 accent-[var(--mta-green)]"
                       />
                     </div>
                   </div>
                   <div
-                    className="relative rounded-lg overflow-hidden shadow-lg"
+                    className="relative rounded-lg overflow-hidden shadow-lg border border-white/10"
                     style={{ backgroundColor: NOTE_COLORS[noteColor] }}
                   >
                     <canvas
@@ -380,7 +391,8 @@ export default function NoteCreator({
                   </div>
                   <button
                     onClick={clearCanvas}
-                    className="mt-2 text-sm text-gray-600 hover:text-gray-900"
+                    className="mt-2 text-xs text-white/40 hover:text-white/70 transition-colors tracking-wider uppercase"
+                    style={{ fontFamily: "var(--font-display)", fontWeight: 500 }}
                   >
                     Clear drawing
                   </button>
@@ -389,12 +401,13 @@ export default function NoteCreator({
                 <div>
                   <label
                     htmlFor="note-text"
-                    className="block text-sm font-medium text-gray-700 mb-2"
+                    className="block text-[11px] text-white/40 mb-2 tracking-widest uppercase"
+                    style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}
                   >
                     Type your message
                   </label>
                   <div
-                    className="rounded-lg overflow-hidden shadow-lg p-4"
+                    className="rounded-lg overflow-hidden shadow-lg p-4 border border-white/10"
                     style={{ backgroundColor: NOTE_COLORS[noteColor] }}
                   >
                     <textarea
@@ -403,11 +416,11 @@ export default function NoteCreator({
                       onChange={(e) => setText(e.target.value.slice(0, 200))}
                       placeholder="What's on your mind?"
                       className="w-full h-48 bg-transparent resize-none focus:outline-none text-lg"
-                      style={{ color: INK_COLORS[inkColor] }}
+                      style={{ color: INK_COLORS[inkColor], fontFamily: "var(--font-body)" }}
                       maxLength={200}
                     />
                   </div>
-                  <div className="mt-1 text-right text-xs text-gray-500">
+                  <div className="mt-1 text-right text-[11px] text-white/30" style={{ fontFamily: "var(--font-display)" }}>
                     {text.length}/200
                   </div>
                 </div>
@@ -417,10 +430,11 @@ export default function NoteCreator({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+        <div className="px-6 py-4 border-t border-white/10 flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-6 py-2 rounded-lg text-gray-700 hover:bg-gray-100 font-medium"
+            className="px-5 py-2 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/5 transition-colors text-sm tracking-wider uppercase"
+            style={{ fontFamily: "var(--font-display)", fontWeight: 600 }}
           >
             Cancel
           </button>
@@ -428,9 +442,9 @@ export default function NoteCreator({
             <button
               onClick={handlePreparePlace}
               disabled={!isValid}
-              className="px-6 py-2 rounded-lg bg-[var(--ui-primary)] text-white font-medium hover:bg-[var(--ui-primary-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-5 py-2 rounded-lg bg-[var(--mta-green)] text-white hover:bg-[var(--ui-primary-hover)] disabled:opacity-30 disabled:cursor-not-allowed mta-button text-sm tracking-wider"
             >
-              Place on Wall
+              PLACE ON WALL
             </button>
           )}
         </div>
