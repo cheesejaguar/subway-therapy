@@ -16,17 +16,21 @@ import {
 } from "@/lib/storage";
 import {
   getOrCreateSessionId,
-  setSessionCookie,
+  getSessionCookieConfig,
   canUserPostNote,
-  recordNoteSubmission,
+  getNoteSubmissionCookieConfig,
 } from "@/lib/session";
 import { uploadNoteImage, deleteNoteImage } from "@/lib/blob";
 import {
   StickyNote,
+  CreateNoteRequest,
   ViewportBounds,
   ConvexNote,
   mapConvexNote,
   toPublicStickyNote,
+  WALL_CONFIG,
+  getMaxOverlapWithNotes,
+  MAX_OVERLAP_PERCENTAGE,
 } from "@/lib/types";
 import { moderateImage } from "@/lib/moderation";
 import { validateCreateNoteRequest } from "@/lib/validation";
@@ -201,9 +205,50 @@ export async function POST(request: NextRequest) {
     }
 
     const position =
-      body.x !== undefined && body.y !== undefined
+      body.x != null && body.y != null
         ? { x: body.x, y: body.y }
         : findAvailablePosition();
+
+    // Validate overlap if user provided specific coordinates
+    if (body.x != null && body.y != null) {
+      // Get nearby notes to check overlap
+      const checkBounds: ViewportBounds = {
+        minX: position.x - WALL_CONFIG.noteWidth * 2,
+        maxX: position.x + WALL_CONFIG.noteWidth * 2,
+        minY: position.y - WALL_CONFIG.noteHeight * 2,
+        maxY: position.y + WALL_CONFIG.noteHeight * 2,
+      };
+
+      let nearbyNotes: Array<{ x: number; y: number }> = [];
+
+      if (isConvexConfigured()) {
+        const convex = getConvexClient();
+        const convexNotes = await convex.query(api.notes.getNotesInViewport, checkBounds) as ConvexNote[];
+        nearbyNotes = convexNotes.map((n) => ({ x: n.x, y: n.y }));
+      } else {
+        const allNotes = await getAllNotesInMemory();
+        nearbyNotes = allNotes
+          .filter(
+            (n) =>
+              n.x >= checkBounds.minX &&
+              n.x <= checkBounds.maxX &&
+              n.y >= checkBounds.minY &&
+              n.y <= checkBounds.maxY
+          )
+          .map((n) => ({ x: n.x, y: n.y }));
+      }
+
+      const maxOverlap = getMaxOverlapWithNotes(position.x, position.y, nearbyNotes);
+
+      if (maxOverlap > MAX_OVERLAP_PERCENTAGE) {
+        return NextResponse.json(
+          {
+            error: `Note placement would overlap too much with existing notes (${Math.round(maxOverlap * 100)}% overlap, max allowed is ${Math.round(MAX_OVERLAP_PERCENTAGE * 100)}%). Please choose a different location.`,
+          },
+          { status: 400 }
+        );
+      }
+    }
 
     const rotation = Math.random() * 6 - 3;
     const createdAt = new Date().toISOString();
@@ -245,10 +290,7 @@ export async function POST(request: NextRequest) {
       await createNoteInMemory(note);
     }
 
-    // Persist cooldown tracking and session after successful write.
-    await recordNoteSubmission();
-    await setSessionCookie(sessionId);
-
+    // Generate appropriate message based on moderation status
     let message: string;
     if (moderationStatus === "approved") {
       message = "Note posted and approved! It's now visible on the wall.";
@@ -260,7 +302,8 @@ export async function POST(request: NextRequest) {
       message = "Note posted! It will be visible to others after moderation.";
     }
 
-    return NextResponse.json({
+    // Create response and set cookies on it
+    const response = NextResponse.json({
       success: true,
       note: {
         id: noteId,
@@ -271,6 +314,16 @@ export async function POST(request: NextRequest) {
       },
       message,
     });
+
+    // Set session cookie on response
+    const sessionCookie = getSessionCookieConfig(sessionId);
+    response.cookies.set(sessionCookie.name, sessionCookie.value, sessionCookie.options);
+
+    // Record note submission cookie on response
+    const submissionCookie = getNoteSubmissionCookieConfig();
+    response.cookies.set(submissionCookie.name, submissionCookie.value, submissionCookie.options);
+
+    return response;
   } catch (routeError) {
     if (uploadedImageUrl) {
       await deleteNoteImage(uploadedImageUrl);

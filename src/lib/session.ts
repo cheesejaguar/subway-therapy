@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import type { ResponseCookie } from "next/dist/compiled/@edge-runtime/cookies";
 import { SESSION_COOKIE_NAME, LAST_NOTE_COOKIE_NAME } from "./types";
 import { v4 as uuidv4 } from "uuid";
 import { getReporterHashes } from "./abuse";
@@ -29,15 +30,22 @@ export async function getOrCreateSessionId(): Promise<string> {
   return sessionId;
 }
 
-export async function setSessionCookie(sessionId: string): Promise<void> {
-  const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE_NAME, sessionId, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: ONE_YEAR_MS / 1000, // in seconds
-    path: "/",
-  });
+/**
+ * Get the cookie configuration for the session cookie.
+ * Use this with NextResponse.cookies.set() in Route Handlers.
+ */
+export function getSessionCookieConfig(sessionId: string): { name: string; value: string; options: Partial<ResponseCookie> } {
+  return {
+    name: SESSION_COOKIE_NAME,
+    value: sessionId,
+    options: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: ONE_YEAR_MS / 1000, // in seconds
+      path: "/",
+    },
+  };
 }
 
 export async function canUserPostNote(): Promise<{
@@ -106,13 +114,6 @@ export async function recordNoteSubmission(): Promise<void> {
   const timestampIso = new Date().toISOString();
   const timestampMs = Date.parse(timestampIso);
   pruneReporterSubmissionCache(timestampMs);
-  cookieStore.set(LAST_NOTE_COOKIE_NAME, timestampIso, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: ONE_DAY_MS / 1000,
-    path: "/",
-  });
 
   const { dailyReporterHash } = await getReporterHashes(sessionId);
   reporterLastSubmission.set(dailyReporterHash, timestampMs);
@@ -128,6 +129,24 @@ export async function recordNoteSubmission(): Promise<void> {
       console.error("Error recording submission in Convex:", error);
     }
   }
+}
+
+/**
+ * Get the cookie configuration for recording a note submission.
+ * Use this with NextResponse.cookies.set() in Route Handlers.
+ */
+export function getNoteSubmissionCookieConfig(): { name: string; value: string; options: Partial<ResponseCookie> } {
+  return {
+    name: LAST_NOTE_COOKIE_NAME,
+    value: new Date().toISOString(),
+    options: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: ONE_DAY_MS / 1000,
+      path: "/",
+    },
+  };
 }
 
 export function formatTimeRemaining(ms: number): string {

@@ -7,7 +7,8 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import { StickyNote, NoteColor, WALL_CONFIG, ViewportBounds, NOTE_COLORS } from "@/lib/types";
+import { useGesture } from "@use-gesture/react";
+import { StickyNote, NoteColor, WALL_CONFIG, ViewportBounds, NOTE_COLORS, getMaxOverlapWithNotes, MAX_OVERLAP_PERCENTAGE } from "@/lib/types";
 import StickyNoteComponent from "./StickyNote";
 import Minimap from "./Minimap";
 
@@ -49,12 +50,16 @@ export default function Wall({
   const containerRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [touchDistance, setTouchDistance] = useState<number | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 1000, height: 1000 });
   const [ghostPosition, setGhostPosition] = useState<{ x: number; y: number } | null>(null);
   const [hasInitialized, setHasInitialized] = useState(false);
+  const [currentOverlap, setCurrentOverlap] = useState(0);
+
+  // Refs to track gesture state (needed for combined pinch+drag)
+  const gestureStateRef = useRef({
+    isPinching: false,
+    lastPinchOrigin: { x: 0, y: 0 },
+  });
 
   const { wallWidth, wallHeight } = WALL_CONFIG;
 
@@ -119,129 +124,182 @@ export default function Wall({
     [position, zoom]
   );
 
-  // Mouse event handlers
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.button !== 0) return; // Only left click
-      if (isPlacingNote) return; // Don't drag while placing
-      setIsDragging(true);
-      setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+  const isPlacementValid = currentOverlap <= MAX_OVERLAP_PERCENTAGE;
+
+  // Update ghost position for note placement
+  const updateGhostPosition = useCallback(
+    (clientX: number, clientY: number) => {
+      const wallPos = screenToWall(clientX, clientY);
+      const newGhostPos = { x: wallPos.x - 75, y: wallPos.y - 75 };
+      setGhostPosition(newGhostPos);
+      const overlap = getMaxOverlapWithNotes(newGhostPos.x, newGhostPos.y, notes);
+      setCurrentOverlap(overlap);
     },
-    [position, isPlacingNote]
+    [screenToWall, notes]
   );
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
-      if (isPlacingNote) {
-        // Update ghost position during placement mode
-        const wallPos = screenToWall(e.clientX, e.clientY);
-        // Center the note on the cursor
-        setGhostPosition({ x: wallPos.x - 75, y: wallPos.y - 75 });
-        return;
-      }
-      if (!isDragging) return;
-      setPosition({
-        x: e.clientX - dragStart.x,
-        y: e.clientY - dragStart.y,
-      });
-    },
-    [isDragging, dragStart, isPlacingNote, screenToWall]
-  );
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
+  // Handle click for note placement
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       if (isPlacingNote && onPlaceNote && ghostPosition) {
         e.preventDefault();
         e.stopPropagation();
-        onPlaceNote(ghostPosition.x, ghostPosition.y);
+        if (currentOverlap <= MAX_OVERLAP_PERCENTAGE) {
+          onPlaceNote(ghostPosition.x, ghostPosition.y);
+        }
       }
     },
-    [isPlacingNote, onPlaceNote, ghostPosition]
+    [isPlacingNote, onPlaceNote, ghostPosition, currentOverlap]
   );
 
-  // Touch event handlers
-  const getTouchDistance = (touches: React.TouchList): number => {
-    if (touches.length < 2) return 0;
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  };
-
-  const handleTouchStart = useCallback(
-    (e: React.TouchEvent) => {
-      if (isPlacingNote && e.touches.length === 1) {
-        // Update ghost position on touch
-        const wallPos = screenToWall(e.touches[0].clientX, e.touches[0].clientY);
-        setGhostPosition({ x: wallPos.x - 75, y: wallPos.y - 75 });
-        return;
-      }
-      if (e.touches.length === 1) {
-        setIsDragging(true);
-        setDragStart({
-          x: e.touches[0].clientX - position.x,
-          y: e.touches[0].clientY - position.y,
-        });
-      } else if (e.touches.length === 2) {
-        setTouchDistance(getTouchDistance(e.touches));
+  // Handle tap for note placement on touch devices
+  const handleTouchTap = useCallback(
+    (clientX: number, clientY: number) => {
+      if (isPlacingNote && onPlaceNote) {
+        const wallPos = screenToWall(clientX, clientY);
+        const notePos = { x: wallPos.x - 75, y: wallPos.y - 75 };
+        const overlap = getMaxOverlapWithNotes(notePos.x, notePos.y, notes);
+        if (overlap <= MAX_OVERLAP_PERCENTAGE) {
+          onPlaceNote(notePos.x, notePos.y);
+        }
       }
     },
-    [position, isPlacingNote, screenToWall]
+    [isPlacingNote, onPlaceNote, screenToWall, notes]
   );
 
-  const handleTouchMove = useCallback(
-    (e: React.TouchEvent) => {
-      e.preventDefault();
+  // Use gesture hook for unified touch and mouse handling
+  // This properly handles multi-touch on iOS and Android
+  useGesture(
+    {
+      onDrag: ({ movement: [mx, my], first, memo, pinching, tap, event, touches }) => {
+        // Skip if pinching (pinch handles its own movement)
+        if (pinching) return memo;
 
-      if (isPlacingNote && e.touches.length === 1) {
-        // Update ghost position during drag
-        const wallPos = screenToWall(e.touches[0].clientX, e.touches[0].clientY);
-        setGhostPosition({ x: wallPos.x - 75, y: wallPos.y - 75 });
-        return;
-      }
+        // Handle tap for note placement (works for both touch and mouse)
+        if (tap && isPlacingNote) {
+          // Try touch event first (changedTouches contains the lifted finger)
+          const touchEvent = event as TouchEvent;
+          if (touchEvent.changedTouches?.[0]) {
+            handleTouchTap(
+              touchEvent.changedTouches[0].clientX,
+              touchEvent.changedTouches[0].clientY
+            );
+            return memo;
+          }
+          // Fall back to mouse event
+          const mouseEvent = event as MouseEvent;
+          if (typeof mouseEvent.clientX === 'number' && typeof mouseEvent.clientY === 'number') {
+            handleTouchTap(mouseEvent.clientX, mouseEvent.clientY);
+          }
+          return memo;
+        }
 
-      if (e.touches.length === 1 && isDragging) {
+        // Handle note placement mode - update ghost position
+        if (isPlacingNote) {
+          if (touches > 0) {
+            const touchEvent = event as TouchEvent;
+            if (touchEvent.touches?.[0]) {
+              updateGhostPosition(
+                touchEvent.touches[0].clientX,
+                touchEvent.touches[0].clientY
+              );
+            }
+          } else {
+            const mouseEvent = event as MouseEvent;
+            if (typeof mouseEvent.clientX === 'number' && typeof mouseEvent.clientY === 'number') {
+              updateGhostPosition(mouseEvent.clientX, mouseEvent.clientY);
+            }
+          }
+          return memo;
+        }
+
+        // Store initial position on first drag
+        if (first) {
+          return position;
+        }
+
+        // Calculate new position from initial + movement
+        const initialPos = memo || position;
         setPosition({
-          x: e.touches[0].clientX - dragStart.x,
-          y: e.touches[0].clientY - dragStart.y,
+          x: initialPos.x + mx,
+          y: initialPos.y + my,
         });
-      } else if (e.touches.length === 2 && touchDistance !== null) {
-        const newDistance = getTouchDistance(e.touches);
-        const delta = newDistance - touchDistance;
-        const newZoom = Math.max(
-          MIN_ZOOM,
-          Math.min(MAX_ZOOM, zoom + delta * 0.005)
-        );
+
+        return memo;
+      },
+
+      onPinch: ({ origin: [ox, oy], first, last, offset: [scale], memo }) => {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect) return memo;
+
+        // Get pinch center relative to container
+        const centerX = ox - rect.left;
+        const centerY = oy - rect.top;
+
+        if (first) {
+          gestureStateRef.current.isPinching = true;
+          // Store initial state for this pinch gesture
+          return {
+            initialZoom: zoom,
+            initialPosition: position,
+            initialCenter: { x: centerX, y: centerY },
+          };
+        }
+
+        if (last) {
+          gestureStateRef.current.isPinching = false;
+          return memo;
+        }
+
+        if (!memo) return memo;
+
+        // Calculate new zoom from scale offset
+        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale));
+
+        // Zoom towards the pinch center
+        const zoomRatio = newZoom / memo.initialZoom;
+        const newX = centerX - (memo.initialCenter.x - memo.initialPosition.x) * zoomRatio;
+        const newY = centerY - (memo.initialCenter.y - memo.initialPosition.y) * zoomRatio;
+
         setZoom(newZoom);
-        setTouchDistance(newDistance);
-      }
+        setPosition({ x: newX, y: newY });
+
+        return memo;
+      },
+
+      onMove: ({ event }) => {
+        // Handle mouse move for ghost position in placement mode
+        if (isPlacingNote && event instanceof MouseEvent) {
+          updateGhostPosition(event.clientX, event.clientY);
+        }
+      },
     },
-    [isDragging, dragStart, touchDistance, zoom, isPlacingNote, screenToWall]
+    {
+      target: containerRef,
+      eventOptions: { passive: false },
+      drag: {
+        filterTaps: true,
+        pointer: { touch: true },
+        preventDefault: true,
+      },
+      pinch: {
+        scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM },
+        rubberband: true,
+        pointer: { touch: true },
+        preventDefault: true,
+      },
+    }
   );
 
-  const handleTouchEnd = useCallback(
-    (e: React.TouchEvent) => {
-      if (isPlacingNote && onPlaceNote && ghostPosition) {
-        e.preventDefault();
-        onPlaceNote(ghostPosition.x, ghostPosition.y);
-        return;
-      }
-      setIsDragging(false);
-      setTouchDistance(null);
-    },
-    [isPlacingNote, onPlaceNote, ghostPosition]
-  );
+  // Wheel event for zoom - attached via useEffect for proper passive: false
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-  // Wheel event for zoom
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
+    const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
 
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
+      const rect = container.getBoundingClientRect();
 
       // Get mouse position relative to container
       const mouseX = e.clientX - rect.left;
@@ -249,20 +307,34 @@ export default function Wall({
 
       // Calculate new zoom
       const delta = -e.deltaY * ZOOM_SENSITIVITY;
-      const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom + delta));
 
-      if (newZoom === zoom) return;
+      setZoom((currentZoom) => {
+        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, currentZoom + delta));
+        if (newZoom === currentZoom) return currentZoom;
 
-      // Adjust position to zoom towards mouse pointer
-      const zoomRatio = newZoom / zoom;
-      const newX = mouseX - (mouseX - position.x) * zoomRatio;
-      const newY = mouseY - (mouseY - position.y) * zoomRatio;
+        // Adjust position to zoom towards mouse pointer
+        const zoomRatio = newZoom / currentZoom;
+        setPosition((currentPos) => ({
+          x: mouseX - (mouseX - currentPos.x) * zoomRatio,
+          y: mouseY - (mouseY - currentPos.y) * zoomRatio,
+        }));
 
-      setZoom(newZoom);
-      setPosition({ x: newX, y: newY });
-    },
-    [zoom, position]
-  );
+        return newZoom;
+      });
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  // Handle reset view - used by button click, touch, and keyboard
+  const handleResetView = useCallback(() => {
+    setZoom(1);
+    // Reset to center of wall (500 feet)
+    const centerX = -WALL_CENTER_X + containerSize.width / 2;
+    const centerY = -wallHeight / 2 + containerSize.height / 2;
+    setPosition({ x: centerX, y: centerY });
+  }, [containerSize, wallHeight]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback(
@@ -299,16 +371,11 @@ export default function Wall({
           break;
         case "0":
           e.preventDefault();
-          setZoom(1);
-          // Reset to center of wall (500 feet)
-          setPosition({
-            x: -WALL_CENTER_X + containerSize.width / 2,
-            y: -wallHeight / 2 + containerSize.height / 2,
-          });
+          handleResetView();
           break;
       }
     },
-    [containerSize, wallHeight]
+    [handleResetView]
   );
 
   // Get current viewport bounds
@@ -369,22 +436,18 @@ export default function Wall({
   return (
     <div
       ref={containerRef}
-      className={`wall-container w-full h-full overflow-hidden focus:outline-none bg-[var(--tile-grout)] ${
-        isPlacingNote ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"
+      className={`wall-container w-full h-full overflow-hidden focus:outline-none bg-[var(--tile-grout)] touch-none ${
+        isPlacingNote
+          ? isPlacementValid
+            ? "cursor-crosshair"
+            : "cursor-not-allowed"
+          : "cursor-grab active:cursor-grabbing"
       }`}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
       onClick={handleClick}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      onWheel={handleWheel}
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="application"
-      aria-label="Virtual sticky note wall. Use arrow keys to navigate, plus and minus to zoom, 0 to reset view."
+      aria-label="Virtual sticky note wall. Use arrow keys to navigate, pinch to zoom, tap Reset to return to center."
     >
       <div
         className="relative"
@@ -434,58 +497,49 @@ export default function Wall({
         {/* Ghost note during placement */}
         {isPlacingNote && pendingNote && ghostPosition && (
           <div
-            className="sticky-note opacity-70 pointer-events-none"
+            className={`sticky-note pointer-events-none transition-all ${
+              isPlacementValid ? "opacity-70" : "opacity-50"
+            }`}
             style={{
-              backgroundColor: NOTE_COLORS[pendingNote.color],
+              backgroundColor: isPlacementValid
+                ? NOTE_COLORS[pendingNote.color]
+                : "#ff4444",
               left: ghostPosition.x,
               top: ghostPosition.y,
               transform: "rotate(0deg)",
+              boxShadow: isPlacementValid
+                ? undefined
+                : "0 0 20px rgba(255, 0, 0, 0.5)",
             }}
           >
             <img
               src={pendingNote.imageData}
               alt="Note preview"
               className="w-full h-full object-contain"
+              style={{
+                opacity: isPlacementValid ? 1 : 0.5,
+              }}
             />
           </div>
         )}
       </div>
 
-      {/* Zoom controls - positioned above safe area */}
-      <div
-        className="absolute right-4 flex flex-col gap-2 z-20"
+      {/* Reset button - positioned above safe area */}
+      <button
+        onClick={handleResetView}
+        className="absolute right-4 w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-sm font-medium text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target z-20"
         style={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))" }}
-        role="group"
-        aria-label="Zoom controls"
+        aria-label="Reset view"
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchMove={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          handleResetView();
+        }}
       >
-        <button
-          onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z + 0.2))}
-          className="w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-xl font-bold text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target"
-          aria-label="Zoom in"
-        >
-          +
-        </button>
-        <button
-          onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z - 0.2))}
-          className="w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-xl font-bold text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target"
-          aria-label="Zoom out"
-        >
-          -
-        </button>
-        <button
-          onClick={() => {
-            setZoom(1);
-            // Reset to center of wall (500 feet)
-            const centerX = -WALL_CENTER_X + containerSize.width / 2;
-            const centerY = -wallHeight / 2 + containerSize.height / 2;
-            setPosition({ x: centerX, y: centerY });
-          }}
-          className="w-10 h-10 bg-white rounded-lg shadow-lg flex items-center justify-center text-sm font-medium text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-[var(--ui-primary)] touch-target"
-          aria-label="Reset view"
-        >
-          Reset
-        </button>
-      </div>
+        Reset
+      </button>
 
       {/* Current zoom level indicator */}
       <div
@@ -498,8 +552,10 @@ export default function Wall({
       {/* Placement mode UI */}
       {isPlacingNote && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white rounded-lg shadow-lg px-6 py-3 z-30 flex items-center gap-4">
-          <span className="text-gray-700 font-medium">
-            Click on the wall to place your note
+          <span className={`font-medium ${isPlacementValid ? "text-gray-700" : "text-red-600"}`}>
+            {isPlacementValid
+              ? "Click on the wall to place your note"
+              : "Too much overlap - move to a clearer spot"}
           </span>
           <button
             onClick={onCancelPlacement}

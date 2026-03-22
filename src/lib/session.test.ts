@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { formatTimeRemaining } from "./session";
+import { formatTimeRemaining, getSessionCookieConfig, getNoteSubmissionCookieConfig } from "./session";
 
-// Note: getOrCreateSessionId, setSessionCookie, canUserPostNote, and recordNoteSubmission
-// depend on next/headers cookies() which requires a request context.
-// These are tested via integration tests in the API routes.
+// Note: getOrCreateSessionId and canUserPostNote depend on next/headers cookies()
+// which requires a request context. These are tested via integration tests in the API routes.
 
 describe("session", () => {
   beforeEach(() => {
@@ -45,6 +44,38 @@ describe("session", () => {
       // 23 hours 59 minutes
       const almostDay = 23 * 60 * 60 * 1000 + 59 * 60 * 1000;
       expect(formatTimeRemaining(almostDay)).toBe("23h 59m");
+    });
+  });
+
+  describe("getSessionCookieConfig", () => {
+    it("should return correct cookie configuration", () => {
+      const sessionId = "test-session-123";
+      const config = getSessionCookieConfig(sessionId);
+
+      expect(config.name).toBe("subway_therapy_session");
+      expect(config.value).toBe(sessionId);
+      expect(config.options.httpOnly).toBe(true);
+      expect(config.options.sameSite).toBe("lax");
+      expect(config.options.path).toBe("/");
+      expect(config.options.maxAge).toBe(365 * 24 * 60 * 60); // 1 year in seconds
+    });
+  });
+
+  describe("getNoteSubmissionCookieConfig", () => {
+    it("should return correct cookie configuration with current timestamp", () => {
+      const before = new Date();
+      const config = getNoteSubmissionCookieConfig();
+      const after = new Date();
+
+      expect(config.name).toBe("subway_therapy_last_note");
+      // Value should be an ISO timestamp between before and after
+      const timestamp = new Date(config.value);
+      expect(timestamp.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(timestamp.getTime()).toBeLessThanOrEqual(after.getTime());
+      expect(config.options.httpOnly).toBe(true);
+      expect(config.options.sameSite).toBe("lax");
+      expect(config.options.path).toBe("/");
+      expect(config.options.maxAge).toBe(24 * 60 * 60); // 1 day in seconds
     });
   });
 });
