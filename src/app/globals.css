@@ -206,15 +206,35 @@ body {
 }
 
 .mta-bullet-sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
+  border-radius: 50%;
+  color: white;
+  font-family: var(--font-display);
+  font-weight: 700;
   font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+  letter-spacing: -0.02em;
 }
 
 .mta-bullet-lg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
+  border-radius: 50%;
+  color: white;
+  font-family: var(--font-display);
+  font-weight: 700;
   font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+  letter-spacing: -0.02em;
 }
 
 /* ═══════════════════════════════════════
