@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { api } from "../../../../convex/_generated/api";
-import { getConvexClient, isConvexConfigured } from "@/lib/convex";
+import { api, internal } from "../../../../convex/_generated/api";
+import {
+  getConvexAdminClient,
+  getConvexClient,
+  isConvexAdminConfigured,
+  isConvexConfigured,
+} from "@/lib/convex";
 import {
   createNote as createNoteInMemory,
   getNotesInViewport as getNotesInViewportInMemory,
@@ -14,19 +19,63 @@ import {
   canUserPostNote,
   getNoteSubmissionCookieConfig,
 } from "@/lib/session";
-import { uploadNoteImage } from "@/lib/blob";
-import { StickyNote, CreateNoteRequest, ViewportBounds, ConvexNote, mapConvexNote, WALL_CONFIG, getMaxOverlapWithNotes, MAX_OVERLAP_PERCENTAGE } from "@/lib/types";
+import { uploadNoteImage, deleteNoteImage } from "@/lib/blob";
+import {
+  StickyNote,
+  CreateNoteRequest,
+  ViewportBounds,
+  ConvexNote,
+  mapConvexNote,
+  toPublicStickyNote,
+  WALL_CONFIG,
+  getMaxOverlapWithNotes,
+  MAX_OVERLAP_PERCENTAGE,
+} from "@/lib/types";
 import { moderateImage } from "@/lib/moderation";
+import { validateCreateNoteRequest } from "@/lib/validation";
+import { checkPostAttemptRateLimit } from "@/lib/abuse";
 
 // Initialize sample notes on first request (for dev mode only)
 let initialized = false;
 
-export async function GET(request: NextRequest) {
+function parseViewportBounds(request: NextRequest): {
+  bounds?: ViewportBounds;
+  error?: string;
+} {
   const searchParams = request.nextUrl.searchParams;
   const minX = searchParams.get("minX");
   const maxX = searchParams.get("maxX");
   const minY = searchParams.get("minY");
   const maxY = searchParams.get("maxY");
+
+  if (!minX && !maxX && !minY && !maxY) {
+    return {};
+  }
+
+  if (!minX || !maxX || !minY || !maxY) {
+    return { error: "All viewport bounds are required" };
+  }
+
+  const parsedBounds: ViewportBounds = {
+    minX: Number(minX),
+    maxX: Number(maxX),
+    minY: Number(minY),
+    maxY: Number(maxY),
+  };
+
+  const invalid = Object.values(parsedBounds).some((value) => !Number.isFinite(value));
+  if (invalid) {
+    return { error: "Invalid viewport bounds" };
+  }
+
+  return { bounds: parsedBounds };
+}
+
+export async function GET(request: NextRequest) {
+  const { bounds, error } = parseViewportBounds(request);
+  if (error) {
+    return NextResponse.json({ error }, { status: 400 });
+  }
 
   try {
     let notes: StickyNote[];
@@ -34,16 +83,16 @@ export async function GET(request: NextRequest) {
     if (isConvexConfigured()) {
       const convex = getConvexClient();
 
-      if (minX && maxX && minY && maxY) {
-        const convexNotes = await convex.query(api.notes.getNotesInViewport, {
-          minX: parseFloat(minX),
-          maxX: parseFloat(maxX),
-          minY: parseFloat(minY),
-          maxY: parseFloat(maxY),
-        }) as ConvexNote[];
+      if (bounds) {
+        const convexNotes = (await convex.query(api.notes.getNotesInViewport, {
+          minX: bounds.minX,
+          maxX: bounds.maxX,
+          minY: bounds.minY,
+          maxY: bounds.maxY,
+        })) as ConvexNote[];
         notes = convexNotes.map(mapConvexNote);
       } else {
-        const convexNotes = await convex.query(api.notes.getPublicNotes, {}) as ConvexNote[];
+        const convexNotes = (await convex.query(api.notes.getPublicNotes, {})) as ConvexNote[];
         notes = convexNotes.map(mapConvexNote);
       }
     } else {
@@ -53,33 +102,41 @@ export async function GET(request: NextRequest) {
         initialized = true;
       }
 
-      if (minX && maxX && minY && maxY) {
-        const bounds: ViewportBounds = {
-          minX: parseFloat(minX),
-          maxX: parseFloat(maxX),
-          minY: parseFloat(minY),
-          maxY: parseFloat(maxY),
-        };
+      if (bounds) {
         notes = await getNotesInViewportInMemory(bounds);
       } else {
-        notes = (await getAllNotesInMemory()).filter(
-          (note) => note.moderationStatus === "approved" || note.moderationStatus === "pending"
-        );
+        notes = await getAllNotesInMemory();
       }
     }
 
-    return NextResponse.json({ notes });
-  } catch (error) {
-    console.error("Error fetching notes:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch notes" },
-      { status: 500 }
-    );
+    const publicNotes = notes
+      .filter((note) => note.moderationStatus === "approved")
+      .map(toPublicStickyNote);
+
+    return NextResponse.json({ notes: publicNotes });
+  } catch (routeError) {
+    console.error("Error fetching notes:", routeError);
+    return NextResponse.json({ error: "Failed to fetch notes" }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
+  let uploadedImageUrl: string | null = null;
+
   try {
+    const postRateLimit = await checkPostAttemptRateLimit();
+    if (!postRateLimit.allowed) {
+      return NextResponse.json(
+        {
+          error: "Too many attempts. Please wait before trying again.",
+          retryAfterMs: postRateLimit.retryAfterMs,
+        },
+        { status: 429 }
+      );
+    }
+
+    const sessionId = await getOrCreateSessionId();
+
     // Check if user can post
     const postCheck = await canUserPostNote();
     if (!postCheck.canPost) {
@@ -92,48 +149,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body: CreateNoteRequest = await request.json();
-
-    if (!body.imageData || !body.color) {
-      return NextResponse.json(
-        { error: "Missing required fields" },
-        { status: 400 }
-      );
+    let payload: unknown;
+    try {
+      payload = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    // Validate image data
-    if (!body.imageData.startsWith("data:image/")) {
-      return NextResponse.json(
-        { error: "Invalid image data" },
-        { status: 400 }
-      );
+    const validation = validateCreateNoteRequest(payload);
+    if (!validation.ok) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
     }
-
-    // Check image size (max 500KB)
-    const base64Size = body.imageData.length * 0.75;
-    if (base64Size > 500000) {
-      return NextResponse.json(
-        { error: "Image too large. Please keep it under 500KB." },
-        { status: 400 }
-      );
-    }
-
-    // Get or create session
-    const sessionId = await getOrCreateSessionId();
+    const body = validation.value;
 
     // Generate note ID
     const noteId = crypto.randomUUID();
 
     // Upload image to blob storage
-    let imageUrl: string;
     try {
-      imageUrl = await uploadNoteImage(body.imageData, noteId);
-    } catch (error) {
-      console.error("Failed to upload image:", error);
-      return NextResponse.json(
-        { error: "Failed to upload image" },
-        { status: 500 }
-      );
+      uploadedImageUrl = await uploadNoteImage(body.imageData, noteId);
+    } catch (uploadError) {
+      console.error("Failed to upload image:", uploadError);
+      return NextResponse.json({ error: "Failed to upload image" }, { status: 500 });
+    }
+
+    if (!uploadedImageUrl) {
+      return NextResponse.json({ error: "Failed to upload image" }, { status: 500 });
     }
 
     // Run AI moderation on the image
@@ -150,7 +191,7 @@ export async function POST(request: NextRequest) {
         moderationStatus = moderation.approved ? "approved" : "rejected";
         moderationReason = moderation.reason;
       }
-      // Log moderation result for monitoring
+
       console.log("AI Moderation:", {
         noteId,
         decision: moderationStatus,
@@ -158,12 +199,10 @@ export async function POST(request: NextRequest) {
         reason: moderation.reason,
         tokens: { input: moderation.inputTokens, output: moderation.outputTokens },
       });
-    } catch (error) {
-      console.error("AI moderation failed, defaulting to pending:", error);
-      // On moderation failure, leave as pending for manual review
+    } catch (moderationError) {
+      console.error("AI moderation failed, defaulting to pending:", moderationError);
     }
 
-    // Find position for the note
     const position =
       body.x != null && body.y != null
         ? { x: body.x, y: body.y }
@@ -214,10 +253,17 @@ export async function POST(request: NextRequest) {
     const createdAt = new Date().toISOString();
 
     if (isConvexConfigured()) {
-      const convex = getConvexClient();
-      await convex.mutation(api.notes.createNote, {
+      if (!isConvexAdminConfigured()) {
+        return NextResponse.json(
+          { error: "Server configuration error: missing Convex admin credentials" },
+          { status: 503 }
+        );
+      }
+
+      const convex = getConvexAdminClient();
+      await convex.mutation(internal.notes.createNote, {
         visibleId: noteId,
-        imageUrl,
+        imageUrl: uploadedImageUrl,
         color: body.color,
         x: position.x,
         y: position.y,
@@ -228,10 +274,9 @@ export async function POST(request: NextRequest) {
         sessionId,
       });
     } else {
-      // Fall back to in-memory storage
       const note: StickyNote = {
         id: noteId,
-        imageUrl,
+        imageUrl: uploadedImageUrl,
         color: body.color,
         x: position.x,
         y: position.y,
@@ -249,7 +294,9 @@ export async function POST(request: NextRequest) {
     if (moderationStatus === "approved") {
       message = "Note posted and approved! It's now visible on the wall.";
     } else if (moderationStatus === "rejected") {
-      message = `Note was not approved: ${moderationReason || "Content does not meet community guidelines."}`;
+      message = `Note was not approved: ${
+        moderationReason || "Content does not meet community guidelines."
+      }`;
     } else {
       message = "Note posted! It will be visible to others after moderation.";
     }
@@ -276,11 +323,12 @@ export async function POST(request: NextRequest) {
     response.cookies.set(submissionCookie.name, submissionCookie.value, submissionCookie.options);
 
     return response;
-  } catch (error) {
-    console.error("Error creating note:", error);
-    return NextResponse.json(
-      { error: "Failed to create note" },
-      { status: 500 }
-    );
+  } catch (routeError) {
+    if (uploadedImageUrl) {
+      await deleteNoteImage(uploadedImageUrl);
+    }
+
+    console.error("Error creating note:", routeError);
+    return NextResponse.json({ error: "Failed to create note" }, { status: 500 });
   }
 }

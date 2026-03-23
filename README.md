@@ -66,15 +66,17 @@ Open [http://localhost:3000](http://localhost:3000) to see the wall.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `ADMIN_API_KEY` | Yes (prod) | Admin dashboard authentication key |
+| `ADMIN_SESSION_SECRET` | Recommended | Secret used to sign admin session cookies |
 | `BLOB_READ_WRITE_TOKEN` | Yes | Vercel Blob storage token |
 | `NEXT_PUBLIC_CONVEX_URL` | Yes | Convex deployment URL |
 | `CONVEX_DEPLOY_KEY` | Yes (prod) | Convex deployment key |
-| `VERCEL_AI_API_KEY` | No | Enables automatic AI content moderation |
+| `AI_GATEWAY_API_KEY` | No | Enables automatic AI content moderation |
+| `RATE_LIMIT_SECRET` | Recommended | Secret seed used for abuse-rate hashing |
 | `NEXT_PUBLIC_SITE_URL` | No | Site URL for SEO metadata |
 
 ## AI Moderation
 
-When `VERCEL_AI_API_KEY` is configured, submitted notes are automatically analyzed using Llama 4 Scout:
+When `AI_GATEWAY_API_KEY` is configured, submitted notes are automatically analyzed using Llama 4 Scout:
 
 - **Auto-approved**: Content with high confidence of being appropriate
 - **Auto-rejected**: Content that clearly violates guidelines
@@ -96,6 +98,8 @@ Access the admin panel at `/admin` to:
 - Approve or reject submissions
 - Delete inappropriate content
 - Monitor submission statistics
+
+Admin access uses secure HttpOnly cookie sessions; admin API keys are never stored in browser storage.
 
 ## Deployment
 

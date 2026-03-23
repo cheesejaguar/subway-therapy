@@ -13,8 +13,6 @@ interface Stats {
 
 type FilterStatus = ModerationStatus | "all";
 
-const SESSION_KEY = "subway_admin_key";
-
 export default function AdminDashboard() {
   const [notes, setNotes] = useState<StickyNote[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -22,21 +20,39 @@ export default function AdminDashboard() {
   const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
 
   // Auth state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [apiKey, setApiKey] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
-  // Check for existing session on mount
+  // Check existing auth session on mount
   useEffect(() => {
-    const storedKey = sessionStorage.getItem(SESSION_KEY);
-    if (storedKey) {
-      setApiKey(storedKey);
-      setIsAuthenticated(true);
-    }
+    const checkAuth = async () => {
+      try {
+        const response = await fetch("/api/admin/auth");
+        if (response.status === 503) {
+          const data = await response.json();
+          setConfigError(data.error || "Admin authentication is not configured");
+          setIsAuthenticated(false);
+          return;
+        }
+
+        if (!response.ok) {
+          setIsAuthenticated(false);
+          return;
+        }
+
+        const data = await response.json();
+        setIsAuthenticated(!!data.authenticated);
+      } catch {
+        setIsAuthenticated(false);
+      }
+    };
+
+    checkAuth();
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -45,12 +61,17 @@ export default function AdminDashboard() {
     setIsAuthenticating(true);
 
     try {
-      // Test the key by making a request
-      const response = await fetch("/api/admin/notes?status=pending", {
-        headers: {
-          Authorization: `Bearer ${passwordInput}`,
-        },
+      const response = await fetch("/api/admin/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: passwordInput }),
       });
+
+      if (response.status === 503) {
+        const data = await response.json();
+        setConfigError(data.error || "Admin authentication is not configured");
+        return;
+      }
 
       if (response.status === 401) {
         setAuthError("Invalid password");
@@ -62,11 +83,9 @@ export default function AdminDashboard() {
         return;
       }
 
-      // Success - store key and set authenticated
-      sessionStorage.setItem(SESSION_KEY, passwordInput);
-      setApiKey(passwordInput);
       setIsAuthenticated(true);
       setPasswordInput("");
+      setConfigError(null);
     } catch {
       setAuthError("Connection error");
     } finally {
@@ -74,20 +93,23 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleLogout = () => {
-    sessionStorage.removeItem(SESSION_KEY);
-    setApiKey("");
+  const handleLogout = useCallback(() => {
     setIsAuthenticated(false);
     setNotes([]);
     setStats(null);
-  };
+    setSelectedNotes(new Set());
+    setError(null);
+  }, []);
 
-  const authHeaders = useCallback(() => {
-    return {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    };
-  }, [apiKey]);
+  const logoutRequest = useCallback(async () => {
+    try {
+      await fetch("/api/admin/auth", { method: "DELETE" });
+    } catch {
+      // No-op: local logout state still applies.
+    } finally {
+      handleLogout();
+    }
+  }, [handleLogout]);
 
   const fetchNotes = useCallback(async () => {
     if (!isAuthenticated) return;
@@ -101,17 +123,16 @@ export default function AdminDashboard() {
         params.set("status", filter);
       }
 
-      const response = await fetch(`/api/admin/notes?${params}`, {
-        headers: authHeaders(),
-      });
+      const response = await fetch(`/api/admin/notes?${params}`);
 
       if (response.status === 401) {
-        handleLogout();
+        await logoutRequest();
         return;
       }
 
       if (!response.ok) {
-        throw new Error("Failed to fetch notes");
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "Failed to fetch notes");
       }
 
       const data = await response.json();
@@ -122,7 +143,7 @@ export default function AdminDashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [filter, isAuthenticated, authHeaders]);
+  }, [filter, isAuthenticated, logoutRequest]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -137,17 +158,18 @@ export default function AdminDashboard() {
     try {
       const response = await fetch("/api/admin/moderate", {
         method: "POST",
-        headers: authHeaders(),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ noteId, action }),
       });
 
       if (response.status === 401) {
-        handleLogout();
+        await logoutRequest();
         return;
       }
 
       if (!response.ok) {
-        throw new Error("Failed to moderate note");
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "Failed to moderate note");
       }
 
       await fetchNotes();
@@ -162,7 +184,7 @@ export default function AdminDashboard() {
     try {
       const response = await fetch("/api/admin/moderate", {
         method: "PUT",
-        headers: authHeaders(),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           noteIds: Array.from(selectedNotes),
           action,
@@ -170,12 +192,13 @@ export default function AdminDashboard() {
       });
 
       if (response.status === 401) {
-        handleLogout();
+        await logoutRequest();
         return;
       }
 
       if (!response.ok) {
-        throw new Error("Failed to batch moderate notes");
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || "Failed to batch moderate notes");
       }
 
       setSelectedNotes(new Set());
@@ -235,9 +258,12 @@ export default function AdminDashboard() {
             {authError && (
               <div className="text-red-600 text-sm">{authError}</div>
             )}
+            {configError && (
+              <div className="text-red-600 text-sm">{configError}</div>
+            )}
             <button
               type="submit"
-              disabled={isAuthenticating || !passwordInput}
+              disabled={isAuthenticating || !passwordInput || !!configError}
               className="w-full py-2 px-4 bg-[var(--ui-primary)] text-white font-medium rounded-lg hover:bg-[var(--ui-primary-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isAuthenticating ? "Authenticating..." : "Login"}
@@ -257,7 +283,7 @@ export default function AdminDashboard() {
             Subway Therapy - Moderation Dashboard
           </h1>
           <button
-            onClick={handleLogout}
+            onClick={logoutRequest}
             className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
           >
             Logout

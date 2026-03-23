@@ -6,6 +6,7 @@ import * as convex from "@/lib/convex";
 import * as session from "@/lib/session";
 import * as blob from "@/lib/blob";
 import * as moderation from "@/lib/moderation";
+import * as abuse from "@/lib/abuse";
 import type { StickyNote } from "@/lib/types";
 
 // Mock all dependencies
@@ -19,7 +20,9 @@ vi.mock("@/lib/storage", () => ({
 
 vi.mock("@/lib/convex", () => ({
   isConvexConfigured: vi.fn(),
+  isConvexAdminConfigured: vi.fn(),
   getConvexClient: vi.fn(),
+  getConvexAdminClient: vi.fn(),
 }));
 
 vi.mock("@/lib/session", () => ({
@@ -39,10 +42,15 @@ vi.mock("@/lib/session", () => ({
 
 vi.mock("@/lib/blob", () => ({
   uploadNoteImage: vi.fn(),
+  deleteNoteImage: vi.fn(),
 }));
 
 vi.mock("@/lib/moderation", () => ({
   moderateImage: vi.fn(),
+}));
+
+vi.mock("@/lib/abuse", () => ({
+  checkPostAttemptRateLimit: vi.fn(),
 }));
 
 // Mock crypto.randomUUID for consistent test IDs
@@ -56,6 +64,7 @@ describe("GET /api/notes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(convex.isConvexConfigured).mockReturnValue(false);
+    vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
   });
 
   it("should return notes without viewport bounds", async () => {
@@ -78,10 +87,12 @@ describe("GET /api/notes", () => {
 
     const request = createMockRequest("http://localhost:3000/api/notes");
     const response = await GET(request);
-    const data = await parseResponse<{ notes: typeof mockNotes }>(response);
+    const data = await parseResponse<{ notes: Array<StickyNote> }>(response);
 
     expect(response.status).toBe(200);
-    expect(data.notes).toEqual(mockNotes);
+    expect(data.notes).toHaveLength(1);
+    expect(data.notes[0].id).toBe("note-1");
+    expect(data.notes[0].sessionId).toBeUndefined();
   });
 
   it("should return notes within viewport bounds", async () => {
@@ -106,10 +117,12 @@ describe("GET /api/notes", () => {
       "http://localhost:3000/api/notes?minX=0&maxX=1000&minY=0&maxY=1000"
     );
     const response = await GET(request);
-    const data = await parseResponse<{ notes: typeof mockNotes }>(response);
+    const data = await parseResponse<{ notes: Array<StickyNote> }>(response);
 
     expect(response.status).toBe(200);
-    expect(data.notes).toEqual(mockNotes);
+    expect(data.notes).toHaveLength(1);
+    expect(data.notes[0].id).toBe("note-1");
+    expect(data.notes[0].sessionId).toBeUndefined();
     expect(storage.getNotesInViewport).toHaveBeenCalledWith({
       minX: 0,
       maxX: 1000,
@@ -118,7 +131,7 @@ describe("GET /api/notes", () => {
     });
   });
 
-  it("should filter out rejected notes", async () => {
+  it("should filter out non-approved notes", async () => {
     const mockNotes: StickyNote[] = [
       {
         id: "note-1",
@@ -162,11 +175,24 @@ describe("GET /api/notes", () => {
 
     const request = createMockRequest("http://localhost:3000/api/notes");
     const response = await GET(request);
-    const data = await parseResponse<{ notes: typeof mockNotes }>(response);
+    const data = await parseResponse<{ notes: Array<StickyNote> }>(response);
 
-    // Should only return approved and pending notes
-    expect(data.notes).toHaveLength(2);
+    // Should only return approved notes.
+    expect(data.notes).toHaveLength(1);
+    expect(data.notes[0].id).toBe("note-1");
     expect(data.notes.map((n) => n.id)).not.toContain("note-3");
+  });
+
+  it("should return 400 for invalid viewport bounds", async () => {
+    const request = createMockRequest(
+      "http://localhost:3000/api/notes?minX=abc&maxX=1000&minY=0&maxY=1000"
+    );
+
+    const response = await GET(request);
+    const data = await parseResponse<{ error: string }>(response);
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe("Invalid viewport bounds");
   });
 
   it("should handle errors gracefully", async () => {
@@ -185,6 +211,8 @@ describe("POST /api/notes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(convex.isConvexConfigured).mockReturnValue(false);
+    vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
+    vi.mocked(abuse.checkPostAttemptRateLimit).mockResolvedValue({ allowed: true });
     vi.mocked(session.canUserPostNote).mockResolvedValue({ canPost: true });
     vi.mocked(session.getOrCreateSessionId).mockResolvedValue("test-session");
     // getSessionCookieConfig and getNoteSubmissionCookieConfig are already mocked in vi.mock setup
@@ -199,6 +227,28 @@ describe("POST /api/notes", () => {
       inputTokens: 1200,
       outputTokens: 50,
     });
+  });
+
+  it("should return 429 when attempt rate limit is exceeded", async () => {
+    vi.mocked(abuse.checkPostAttemptRateLimit).mockResolvedValue({
+      allowed: false,
+      retryAfterMs: 30000,
+    });
+
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+      },
+    });
+
+    const response = await POST(request);
+    const data = await parseResponse<{ error: string; retryAfterMs: number }>(response);
+
+    expect(response.status).toBe(429);
+    expect(data.error).toContain("Too many attempts");
+    expect(data.retryAfterMs).toBe(30000);
   });
 
   it("should return 429 if user cannot post", async () => {
@@ -389,7 +439,7 @@ describe("POST /api/notes", () => {
 
     expect(response.status).toBe(200);
     expect(data.note.x).toBe(12345);
-    expect(data.note.y).toBe(6789);
+    expect(data.note.y).toBe(4050);
   });
 
   it("should reject placement with excessive overlap", async () => {

@@ -86,12 +86,10 @@ export default function Home() {
   };
 
   const handleViewportChange = useCallback((bounds: ViewportBounds) => {
-    // Debounced fetch of notes in viewport
     fetchNotes(bounds);
   }, []);
 
   const handleNoteClick = (note: StickyNote) => {
-    // Could open a modal with larger view
     console.log("Note clicked:", note.id);
   };
 
@@ -152,10 +150,8 @@ export default function Home() {
       setCanPost(false);
       setCantPostReason("Only one note per person per day!");
 
-      // Refresh notes
       await fetchNotes();
 
-      // Clear message after delay
       setTimeout(() => setSubmissionMessage(null), 5000);
     } catch (error) {
       console.error("Error submitting note:", error);
@@ -187,36 +183,49 @@ export default function Home() {
         onCancelPlacement={handleCancelPlacement}
       />
 
-      {/* Add note button - hide during placement */}
+      {/* Add note button — MTA-styled floating action */}
       {!isPlacingNote && (
         <button
           onClick={() => setShowCreator(true)}
-          className="fixed left-1/2 -translate-x-1/2 px-8 py-4 bg-[var(--ui-primary)] text-white font-semibold rounded-full shadow-lg hover:bg-[var(--ui-primary-hover)] transition-all hover:scale-105 focus:ring-4 focus:ring-[var(--ui-primary)]/50 touch-target z-30"
-          style={{ bottom: "calc(2rem + env(safe-area-inset-bottom, 0px))" }}
+          className="fixed left-1/2 -translate-x-1/2 mta-button px-8 py-3.5 bg-[var(--ui-primary)] text-white text-base rounded-full shadow-lg hover:bg-[var(--ui-primary-hover)] focus:ring-4 focus:ring-[var(--mta-yellow)]/50 touch-target z-30"
+          style={{
+            bottom: "calc(1.5rem + env(safe-area-inset-bottom, 0px))",
+            animation: "pulse-glow 2.5s ease-in-out infinite",
+            fontFamily: "var(--font-display)",
+            fontSize: "15px",
+          }}
           aria-label="Add your note"
         >
-          Add Your Note
+          ADD YOUR NOTE
         </button>
       )}
 
       {/* Submitting overlay */}
       {isSubmitting && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg px-6 py-4 shadow-lg flex items-center gap-3">
-            <div className="w-5 h-5 border-2 border-[var(--ui-primary)] border-t-transparent rounded-full animate-spin" />
-            <span className="text-gray-700">Posting your note...</span>
+        <div className="fixed inset-0 modal-overlay flex items-center justify-center z-50">
+          <div className="station-chrome rounded-lg px-6 py-4 flex items-center gap-3" style={{ animation: "fadeIn 0.2s ease" }}>
+            <div className="w-5 h-5 border-2 border-[var(--mta-green)] border-t-transparent rounded-full animate-spin" />
+            <span className="text-white/90" style={{ fontFamily: "var(--font-display)", fontWeight: 500 }}>
+              POSTING YOUR NOTE...
+            </span>
           </div>
         </div>
       )}
 
-      {/* Submission success message */}
+      {/* Submission success message — MTA-style banner */}
       {submissionMessage && (
         <div
-          className="fixed top-4 left-1/2 -translate-x-1/2 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-40 animate-[fadeIn_0.3s_ease]"
+          className="fixed top-4 left-1/2 station-chrome rounded-lg px-5 py-3 z-40 flex items-center gap-3"
+          style={{ animation: "slideDown 0.3s ease", transform: "translate(-50%, 0)" }}
           role="status"
           aria-live="polite"
         >
-          {submissionMessage}
+          <div className="mta-bullet-sm flex items-center justify-center rounded-full bg-[var(--mta-green)] text-white text-xs font-bold" style={{ width: 20, height: 20 }}>
+            &#10003;
+          </div>
+          <span className="text-white/90 text-sm" style={{ fontFamily: "var(--font-body)" }}>
+            {submissionMessage}
+          </span>
         </div>
       )}
 

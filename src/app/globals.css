@@ -1,40 +1,65 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Barlow:wght@400;500;600;700&display=swap');
 
 :root {
-  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --font-body: 'Barlow', 'Helvetica Neue', Helvetica, sans-serif;
 
-  /* Subway tile colors */
-  --tile-bg: #e8e4dc;
-  --tile-grout: #c4c0b8;
-  --tile-size: 219px; /* 4.375 inches at 50px/inch */
+  /* MTA subway line colors */
+  --mta-red: #EE352E;
+  --mta-orange: #FF6319;
+  --mta-yellow: #FCCC0A;
+  --mta-green: #00933C;
+  --mta-blue: #0039A6;
+  --mta-purple: #B933AD;
+  --mta-gray: #808183;
+  --mta-brown: #996633;
+  --mta-light-green: #6CBE45;
 
-  /* Sticky note colors */
-  --note-yellow: #fff740;
-  --note-pink: #ff7eb9;
-  --note-blue: #7afcff;
-  --note-green: #7aff92;
-  --note-orange: #ffb347;
-  --note-purple: #cb9df0;
-  --note-white: #ffffff;
-  --note-coral: #ff6b6b;
+  /* Subway station tile colors */
+  --tile-bg: #F0EDE5;
+  --tile-grout: #C8C3B8;
+  --tile-accent: #BEB9AB;
+  --tile-size: 219px;
+
+  /* Station environment */
+  --station-dark: #1C1C1C;
+  --station-beam: #2A2A2A;
+  --station-sign-bg: #000000;
+  --station-sign-text: #FFFFFF;
+  --station-platform: #3A3A3A;
+  --station-ceiling: #282828;
+
+  /* Sticky note colors — warm, analog, real Post-it feel */
+  --note-yellow: #FFE066;
+  --note-pink: #FF85A1;
+  --note-blue: #6EC6FF;
+  --note-green: #81D4A8;
+  --note-orange: #FFB366;
+  --note-purple: #C9A0DC;
+  --note-white: #F8F6F0;
+  --note-coral: #FF7F7F;
 
   /* Ink colors */
-  --ink-black: #1a1a1a;
-  --ink-blue: #0066cc;
-  --ink-red: #cc0000;
-  --ink-green: #006600;
-  --ink-purple: #660099;
+  --ink-black: #1A1A1A;
+  --ink-blue: #0039A6;
+  --ink-red: #C41E3A;
+  --ink-green: #00684A;
+  --ink-purple: #563D7C;
 
   /* UI colors */
-  --ui-primary: #2d5a27;
-  --ui-primary-hover: #3d7a37;
-  --ui-danger: #dc2626;
-  --ui-warning: #f59e0b;
-  --ui-success: #10b981;
+  --ui-primary: #00933C;
+  --ui-primary-hover: #00A846;
+  --ui-primary-muted: rgba(0, 147, 60, 0.12);
+  --ui-danger: #EE352E;
+  --ui-warning: #FCCC0A;
+  --ui-success: #00933C;
+  --ui-info: #0039A6;
 }
 
 @theme inline {
-  --font-sans: var(--font-sans);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
 }
 
 * {
@@ -63,39 +88,86 @@ html, body {
 }
 
 body {
-  font-family: var(--font-sans);
-  background: var(--tile-bg);
+  font-family: var(--font-body);
+  background: var(--station-dark);
+  color: var(--station-sign-text);
 }
 
-/* Subway tile pattern background */
+/* ═══════════════════════════════════════
+   SUBWAY TILE WALL PATTERN
+   Authentic NYC subway tile grid
+   ═══════════════════════════════════════ */
 .subway-tiles {
   background-color: var(--tile-bg);
   background-image:
-    linear-gradient(var(--tile-grout) 2px, transparent 2px),
-    linear-gradient(90deg, var(--tile-grout) 2px, transparent 2px);
+    /* Grout lines — thin, recessed appearance */
+    linear-gradient(
+      to bottom,
+      var(--tile-grout) 1px,
+      rgba(0,0,0,0.06) 2px,
+      transparent 2px
+    ),
+    linear-gradient(
+      90deg,
+      var(--tile-grout) 1px,
+      rgba(0,0,0,0.06) 2px,
+      transparent 2px
+    );
   background-size: var(--tile-size) var(--tile-size);
   background-position: -1px -1px;
-  /* GPU acceleration for smooth panning */
   will-change: auto;
   backface-visibility: hidden;
   contain: strict;
 }
 
-/* Sticky note base styles */
+/* ═══════════════════════════════════════
+   STICKY NOTE STYLES
+   Real Post-it feel with paper texture
+   ═══════════════════════════════════════ */
 .sticky-note {
   position: absolute;
   width: 150px;
   height: 150px;
   padding: 10px;
   box-shadow:
-    2px 2px 5px rgba(0, 0, 0, 0.15),
-    -1px -1px 2px rgba(255, 255, 255, 0.3) inset;
+    1px 1px 3px rgba(0, 0, 0, 0.12),
+    2px 3px 8px rgba(0, 0, 0, 0.08);
   transform-origin: center center;
   cursor: pointer;
-  /* GPU acceleration */
   will-change: transform;
   backface-visibility: hidden;
   contain: layout style paint;
+}
+
+/* Subtle paper texture overlay */
+.sticky-note::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(255,255,255,0.18) 0%,
+      rgba(255,255,255,0) 40%,
+      rgba(0,0,0,0.02) 100%
+    );
+  pointer-events: none;
+}
+
+/* Sticky top-edge adhesive strip effect */
+.sticky-note::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10%;
+  width: 80%;
+  height: 3px;
+  background: rgba(0,0,0,0.04);
+  border-radius: 0 0 2px 2px;
+  pointer-events: none;
 }
 
 /* Only enable hover effects on devices with hover capability */
@@ -107,36 +179,165 @@ body {
   .sticky-note:hover {
     transform: scale(1.05);
     box-shadow:
-      4px 4px 10px rgba(0, 0, 0, 0.2),
-      -1px -1px 2px rgba(255, 255, 255, 0.3) inset;
+      2px 4px 12px rgba(0, 0, 0, 0.18),
+      0 0 0 1px rgba(0,0,0,0.03);
     z-index: 10;
   }
 }
 
-.sticky-note::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 25px;
-  background: linear-gradient(
-    to bottom,
-    rgba(255, 255, 255, 0.4) 0%,
-    rgba(255, 255, 255, 0) 100%
-  );
-  pointer-events: none;
+/* ═══════════════════════════════════════
+   MTA SUBWAY BULLET COMPONENT
+   The iconic round line indicators
+   ═══════════════════════════════════════ */
+.mta-bullet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: white;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+  letter-spacing: -0.02em;
 }
 
-/* Touch-friendly targets */
+.mta-bullet-sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: white;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+  letter-spacing: -0.02em;
+}
+
+.mta-bullet-lg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: white;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+  letter-spacing: -0.02em;
+}
+
+/* ═══════════════════════════════════════
+   MTA SIGNAGE STYLES
+   Black signs with white Helvetica text
+   ═══════════════════════════════════════ */
+.mta-sign {
+  background: var(--station-sign-bg);
+  color: var(--station-sign-text);
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 2px solid #333;
+  border-radius: 4px;
+}
+
+.mta-sign-border {
+  border: 3px solid var(--station-sign-text);
+  outline: 2px solid var(--station-sign-bg);
+}
+
+/* ═══════════════════════════════════════
+   MTA-STYLE BUTTON
+   ═══════════════════════════════════════ */
+.mta-button {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  transition: all 0.15s ease;
+}
+
+.mta-button:active {
+  transform: scale(0.97);
+}
+
+/* ═══════════════════════════════════════
+   MINIMAP — SUBWAY MAP STYLE
+   ═══════════════════════════════════════ */
+.minimap-track {
+  background: var(--station-dark);
+  border: 1px solid #444;
+  position: relative;
+  overflow: hidden;
+}
+
+.minimap-track::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  right: 8px;
+  height: 3px;
+  background: var(--mta-green);
+  transform: translateY(-50%);
+  border-radius: 2px;
+}
+
+/* ═══════════════════════════════════════
+   UI CHROME — STATION ENVIRONMENT
+   ═══════════════════════════════════════ */
+.station-chrome {
+  background: var(--station-dark);
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow:
+    0 2px 8px rgba(0,0,0,0.4),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.station-chrome-glass {
+  background: rgba(28, 28, 28, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+/* ═══════════════════════════════════════
+   MODAL STYLES — MTA SERVICE ADVISORY
+   ═══════════════════════════════════════ */
+.modal-overlay {
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.modal-card {
+  background: #1E1E1E;
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.5),
+    0 0 0 1px rgba(255,255,255,0.05);
+}
+
+/* ═══════════════════════════════════════
+   TOUCH & ACCESSIBILITY
+   ═══════════════════════════════════════ */
 .touch-target {
   min-width: 44px;
   min-height: 44px;
 }
 
-/* Focus styles for accessibility */
 :focus-visible {
-  outline: 3px solid var(--ui-primary);
+  outline: 3px solid var(--mta-yellow);
   outline-offset: 2px;
 }
 
@@ -149,6 +350,11 @@ body {
 
   .sticky-note {
     border: 2px solid #000000;
+  }
+
+  .station-chrome,
+  .station-chrome-glass {
+    border: 2px solid #ffffff;
   }
 }
 
@@ -163,22 +369,9 @@ body {
   }
 }
 
-/* Scrollbar styling for the wall container */
-.wall-container::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
-}
-
-.wall-container::-webkit-scrollbar-track {
-  background: var(--tile-grout);
-}
-
-.wall-container::-webkit-scrollbar-thumb {
-  background: var(--ui-primary);
-  border-radius: 6px;
-}
-
-/* Animation for new notes */
+/* ═══════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════ */
 @keyframes noteAppear {
   from {
     opacity: 0;
@@ -194,7 +387,43 @@ body {
   animation: noteAppear 0.3s ease-out forwards;
 }
 
-/* Loading skeleton for notes */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 147, 60, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(0, 147, 60, 0); }
+}
+
 .note-skeleton {
   background: linear-gradient(
     90deg,
@@ -206,11 +435,21 @@ body {
   animation: shimmer 1.5s infinite;
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -200% 0;
-  }
+/* Scrollbar styling */
+.wall-container::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.wall-container::-webkit-scrollbar-track {
+  background: var(--station-dark);
+}
+
+.wall-container::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 6px;
+}
+
+.wall-container::-webkit-scrollbar-thumb:hover {
+  background: #555;
 }
