@@ -20,39 +20,8 @@ interface MinimapProps {
 
 export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
   const { wallWidth, wallHeight } = WALL_CONFIG;
-  const containerRef = useRef<HTMLDivElement>(null);
   const sliderRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
-
-  // Stop all pointer/touch/mouse events from propagating to the Wall's
-  // gesture handler.  useGesture binds native (non-React) listeners on
-  // the Wall container, so we must also use native listeners here at
-  // the capture phase to beat it.
-  React.useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    const stop = (e: Event) => {
-      e.stopPropagation();
-    };
-
-    // Capture phase so we run before useGesture's bubble-phase listeners
-    el.addEventListener("pointerdown", stop, true);
-    el.addEventListener("mousedown", stop, true);
-    el.addEventListener("touchstart", stop, { capture: true, passive: false });
-    el.addEventListener("pointermove", stop, true);
-    el.addEventListener("mousemove", stop, true);
-    el.addEventListener("touchmove", stop, { capture: true, passive: false });
-
-    return () => {
-      el.removeEventListener("pointerdown", stop, true);
-      el.removeEventListener("mousedown", stop, true);
-      el.removeEventListener("touchstart", stop, true);
-      el.removeEventListener("pointermove", stop, true);
-      el.removeEventListener("mousemove", stop, true);
-      el.removeEventListener("touchmove", stop, true);
-    };
-  }, []);
 
   const sliderWidth = 220;
   const sliderHeight = 28;
@@ -137,7 +106,7 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
   );
 
   return (
-    <div ref={containerRef} className="absolute top-4 left-4 station-chrome rounded-lg p-3 z-20" style={{ minWidth: sliderWidth + 24 }}>
+    <div className="absolute top-4 left-4 station-chrome rounded-lg p-3 z-20" style={{ minWidth: sliderWidth + 24 }}>
       {/* MTA line bullets header */}
       <div className="flex justify-between items-center mb-2">
         <div className="flex gap-0.5">

@@ -309,19 +309,19 @@ export default function Wall({
       switch (e.key) {
         case "ArrowUp":
           e.preventDefault();
-          setPosition((p) => ({ ...p, y: p.y + moveAmount }));
+          setPosition((p) => ({ ...p, y: p.y - moveAmount }));
           break;
         case "ArrowDown":
           e.preventDefault();
-          setPosition((p) => ({ ...p, y: p.y - moveAmount }));
+          setPosition((p) => ({ ...p, y: p.y + moveAmount }));
           break;
         case "ArrowLeft":
           e.preventDefault();
-          setPosition((p) => ({ ...p, x: p.x + moveAmount }));
+          setPosition((p) => ({ ...p, x: p.x - moveAmount }));
           break;
         case "ArrowRight":
           e.preventDefault();
-          setPosition((p) => ({ ...p, x: p.x - moveAmount }));
+          setPosition((p) => ({ ...p, x: p.x + moveAmount }));
           break;
         case "+":
         case "=":
@@ -393,6 +393,8 @@ export default function Wall({
   );
 
   return (
+    <div className="relative w-full h-full" onKeyDown={handleKeyDown} tabIndex={0} role="application" aria-label="Virtual sticky note wall. Use arrow keys to navigate, pinch to zoom, tap Reset to return to center.">
+    {/* Gesture-bound wall surface */}
     <div
       ref={containerRef}
       className={`wall-container w-full h-full overflow-hidden focus:outline-none bg-[var(--station-dark)] touch-none ${
@@ -403,10 +405,6 @@ export default function Wall({
           : "cursor-grab active:cursor-grabbing"
       }`}
       onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      tabIndex={0}
-      role="application"
-      aria-label="Virtual sticky note wall. Use arrow keys to navigate, pinch to zoom, tap Reset to return to center."
     >
       <div
         className="relative"
@@ -486,6 +484,9 @@ export default function Wall({
           </div>
         )}
       </div>
+    </div>
+
+      {/* === UI overlays — rendered OUTSIDE the gesture container === */}
 
       {/* Bottom-right controls — MTA-styled */}
       <div
@@ -496,13 +497,6 @@ export default function Wall({
           onClick={handleResetView}
           className="station-chrome w-10 h-10 rounded-lg flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors touch-target"
           aria-label="Reset view"
-          onTouchStart={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}
-          onTouchEnd={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            handleResetView();
-          }}
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
             <circle cx="8" cy="8" r="6" />
