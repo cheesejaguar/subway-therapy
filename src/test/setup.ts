@@ -9,10 +9,11 @@ vi.mock("next/headers", () => ({
   })),
 }));
 
-// Mock uuid
-vi.mock("uuid", () => ({
-  v4: vi.fn(() => "test-uuid-1234"),
-}));
+// Mock crypto.randomUUID for consistent test IDs
+vi.stubGlobal("crypto", {
+  ...globalThis.crypto,
+  randomUUID: vi.fn(() => "test-uuid-1234"),
+});
 
 // Mock @vercel/blob
 vi.mock("@vercel/blob", () => ({

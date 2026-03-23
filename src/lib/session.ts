@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import type { ResponseCookie } from "next/dist/compiled/@edge-runtime/cookies";
 import { SESSION_COOKIE_NAME, LAST_NOTE_COOKIE_NAME } from "./types";
-import { v4 as uuidv4 } from "uuid";
 import { getReporterHashes } from "./abuse";
 import { getConvexAdminClient, isConvexAdminConfigured } from "./convex";
 import { internal } from "../../convex/_generated/api";
@@ -24,7 +23,7 @@ export async function getOrCreateSessionId(): Promise<string> {
   let sessionId = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 
   if (!sessionId) {
-    sessionId = uuidv4();
+    sessionId = crypto.randomUUID();
   }
 
   return sessionId;
