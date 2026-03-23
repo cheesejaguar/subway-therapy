@@ -64,7 +64,10 @@ export default function StickyNoteComponent({
       <div className="w-full h-full overflow-hidden relative">
         {note.moderationStatus === "pending" ? (
           <div className="w-full h-full flex items-center justify-center p-4">
-            <span className="text-gray-600 text-sm text-center italic">
+            <span
+              className="text-gray-600 text-xs text-center italic"
+              style={{ fontFamily: "var(--font-body)" }}
+            >
               Pending moderation...
             </span>
           </div>
@@ -82,7 +85,7 @@ export default function StickyNoteComponent({
         )}
       </div>
 
-      {/* Flag button - appears on hover */}
+      {/* Flag button — appears on hover */}
       {showFlagButton && (
         <button
           onClick={(e) => {
@@ -98,15 +101,17 @@ export default function StickyNoteComponent({
         </button>
       )}
 
-      {/* Context menu */}
+      {/* Context menu — dark MTA-styled */}
       {showMenu && (
         <div
-          className="absolute top-8 right-1 bg-white rounded-lg shadow-lg py-1 z-50 min-w-[120px]"
+          className="absolute top-8 right-1 rounded-lg shadow-xl py-1 z-50 min-w-[120px] border border-white/10"
+          style={{ background: "var(--station-dark)" }}
           role="menu"
         >
           <button
             onClick={handleFlag}
-            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+            className="w-full px-4 py-2 text-left text-xs hover:bg-white/10 transition-colors"
+            style={{ color: "var(--mta-red)", fontFamily: "var(--font-display)", fontWeight: 600 }}
             role="menuitem"
           >
             Report note
@@ -114,10 +119,11 @@ export default function StickyNoteComponent({
         </div>
       )}
 
-      {/* Flagged indicator */}
+      {/* Flagged indicator — MTA warning style */}
       {note.flagCount > 0 && (
         <div
-          className="absolute bottom-1 left-1 w-4 h-4 rounded-full bg-yellow-500 flex items-center justify-center text-[10px] text-white font-bold"
+          className="absolute bottom-1 left-1 w-4 h-4 rounded-full flex items-center justify-center text-[10px] text-black font-bold"
+          style={{ backgroundColor: "var(--mta-yellow)" }}
           title={`Flagged ${note.flagCount} time(s)`}
         >
           !

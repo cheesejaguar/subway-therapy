@@ -175,19 +175,19 @@ describe("admin-auth", () => {
 
   describe("isSafeAdminOrigin", () => {
     it("should return true in test environment", () => {
-      process.env.NODE_ENV = "test";
+      vi.stubEnv("NODE_ENV", "test");
       const request = new NextRequest("http://localhost:3000/api/admin/auth");
       expect(isSafeAdminOrigin(request)).toBe(true);
     });
 
     it("should return false when origin header is missing", () => {
-      process.env.NODE_ENV = "production";
+      vi.stubEnv("NODE_ENV", "production");
       const request = new NextRequest("http://localhost:3000/api/admin/auth");
       expect(isSafeAdminOrigin(request)).toBe(false);
     });
 
     it("should return false when origin does not match request", () => {
-      process.env.NODE_ENV = "production";
+      vi.stubEnv("NODE_ENV", "production");
       const request = new NextRequest("http://localhost:3000/api/admin/auth", {
         headers: { origin: "http://evil.example.com" },
       });
@@ -195,7 +195,7 @@ describe("admin-auth", () => {
     });
 
     it("should return true when origin matches request", () => {
-      process.env.NODE_ENV = "production";
+      vi.stubEnv("NODE_ENV", "production");
       const request = new NextRequest("http://localhost:3000/api/admin/auth", {
         headers: { origin: "http://localhost:3000" },
       });
@@ -203,7 +203,7 @@ describe("admin-auth", () => {
     });
 
     it("should return false for cross-site sec-fetch-site", () => {
-      process.env.NODE_ENV = "production";
+      vi.stubEnv("NODE_ENV", "production");
       const request = new NextRequest("http://localhost:3000/api/admin/auth", {
         headers: {
           origin: "http://localhost:3000",
@@ -214,7 +214,7 @@ describe("admin-auth", () => {
     });
 
     it("should return true for same-origin sec-fetch-site", () => {
-      process.env.NODE_ENV = "production";
+      vi.stubEnv("NODE_ENV", "production");
       const request = new NextRequest("http://localhost:3000/api/admin/auth", {
         headers: {
           origin: "http://localhost:3000",
