@@ -552,4 +552,102 @@ describe("POST /api/notes", () => {
     expect(response.status).toBe(500);
     expect(data.error).toBe("Failed to create note");
   });
+
+  it("should still place the note when Convex overlap-check query fails", async () => {
+    vi.mocked(convex.isConvexConfigured).mockReturnValue(true);
+    vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
+
+    const convexMutation = vi.fn().mockResolvedValue("convex-id");
+    const convexAdminQuery = vi.fn();
+    vi.mocked(convex.getConvexAdminClient).mockReturnValue({
+      query: convexAdminQuery,
+      mutation: convexMutation,
+    });
+    vi.mocked(convex.getConvexClient).mockReturnValue({
+      query: vi.fn().mockRejectedValue(new Error("Convex timeout")),
+      mutation: vi.fn(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+        x: 100,
+        y: 200,
+      },
+    });
+
+    const response = await POST(request);
+    const data = await parseResponse<{
+      success: boolean;
+      note: { moderationStatus: string };
+    }>(response);
+
+    expect(response.status).toBe(200);
+    expect(data.success).toBe(true);
+    expect(convexMutation).toHaveBeenCalledOnce();
+  });
+
+  it("should return 502 and clean up blob when Convex createNote mutation fails", async () => {
+    vi.mocked(convex.isConvexConfigured).mockReturnValue(true);
+    vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
+
+    const convexMutation = vi
+      .fn()
+      .mockRejectedValue(new Error("Convex mutation failed"));
+    vi.mocked(convex.getConvexAdminClient).mockReturnValue({
+      query: vi.fn(),
+      mutation: convexMutation,
+    });
+    vi.mocked(convex.getConvexClient).mockReturnValue({
+      query: vi.fn().mockResolvedValue([]),
+      mutation: vi.fn(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+        x: 100,
+        y: 200,
+      },
+    });
+
+    const response = await POST(request);
+    const data = await parseResponse<{ error: string }>(response);
+
+    expect(response.status).toBe(502);
+    expect(data.error).toBe("Failed to save note. Please try again.");
+    expect(blob.deleteNoteImage).toHaveBeenCalledWith("https://blob.test/image.png");
+  });
+
+  it("should return 503 when Convex is configured but admin credentials are missing", async () => {
+    vi.mocked(convex.isConvexConfigured).mockReturnValue(true);
+    vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
+    vi.mocked(convex.getConvexClient).mockReturnValue({
+      query: vi.fn().mockResolvedValue([]),
+      mutation: vi.fn(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+        x: 100,
+        y: 200,
+      },
+    });
+
+    const response = await POST(request);
+    const data = await parseResponse<{ error: string }>(response);
+
+    expect(response.status).toBe(503);
+    expect(data.error).toContain("Convex admin credentials");
+  });
 });
