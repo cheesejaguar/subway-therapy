@@ -22,7 +22,6 @@ import {
 import { uploadNoteImage, deleteNoteImage } from "@/lib/blob";
 import {
   StickyNote,
-  CreateNoteRequest,
   ViewportBounds,
   ConvexNote,
   mapConvexNote,
@@ -218,34 +217,48 @@ export async function POST(request: NextRequest) {
         maxY: position.y + WALL_CONFIG.noteHeight * 2,
       };
 
-      let nearbyNotes: Array<{ x: number; y: number }> = [];
+      // Overlap validation is best-effort: a transient failure to read
+      // nearby notes should not block the user from placing their note.
+      let nearbyNotes: Array<{ x: number; y: number }> | null = null;
 
-      if (isConvexConfigured()) {
-        const convex = getConvexClient();
-        const convexNotes = await convex.query(api.notes.getNotesInViewport, checkBounds) as ConvexNote[];
-        nearbyNotes = convexNotes.map((n) => ({ x: n.x, y: n.y }));
-      } else {
-        const allNotes = await getAllNotesInMemory();
-        nearbyNotes = allNotes
-          .filter(
-            (n) =>
-              n.x >= checkBounds.minX &&
-              n.x <= checkBounds.maxX &&
-              n.y >= checkBounds.minY &&
-              n.y <= checkBounds.maxY
-          )
-          .map((n) => ({ x: n.x, y: n.y }));
+      try {
+        if (isConvexConfigured()) {
+          const convex = getConvexClient();
+          const convexNotes = (await convex.query(
+            api.notes.getNotesInViewport,
+            checkBounds
+          )) as ConvexNote[];
+          nearbyNotes = convexNotes.map((n) => ({ x: n.x, y: n.y }));
+        } else {
+          const allNotes = await getAllNotesInMemory();
+          nearbyNotes = allNotes
+            .filter(
+              (n) =>
+                n.x >= checkBounds.minX &&
+                n.x <= checkBounds.maxX &&
+                n.y >= checkBounds.minY &&
+                n.y <= checkBounds.maxY
+            )
+            .map((n) => ({ x: n.x, y: n.y }));
+        }
+      } catch (overlapError) {
+        console.error(
+          "Overlap check failed, skipping overlap validation:",
+          overlapError
+        );
       }
 
-      const maxOverlap = getMaxOverlapWithNotes(position.x, position.y, nearbyNotes);
+      if (nearbyNotes) {
+        const maxOverlap = getMaxOverlapWithNotes(position.x, position.y, nearbyNotes);
 
-      if (maxOverlap > MAX_OVERLAP_PERCENTAGE) {
-        return NextResponse.json(
-          {
-            error: `Note placement would overlap too much with existing notes (${Math.round(maxOverlap * 100)}% overlap, max allowed is ${Math.round(MAX_OVERLAP_PERCENTAGE * 100)}%). Please choose a different location.`,
-          },
-          { status: 400 }
-        );
+        if (maxOverlap > MAX_OVERLAP_PERCENTAGE) {
+          return NextResponse.json(
+            {
+              error: `Note placement would overlap too much with existing notes (${Math.round(maxOverlap * 100)}% overlap, max allowed is ${Math.round(MAX_OVERLAP_PERCENTAGE * 100)}%). Please choose a different location.`,
+            },
+            { status: 400 }
+          );
+        }
       }
     }
 
@@ -260,19 +273,30 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const convex = getConvexAdminClient();
-      await convex.mutation(internal.notes.createNote, {
-        visibleId: noteId,
-        imageUrl: uploadedImageUrl,
-        color: body.color,
-        x: position.x,
-        y: position.y,
-        rotation,
-        createdAt,
-        moderationStatus,
-        flagCount: 0,
-        sessionId,
-      });
+      try {
+        const convex = getConvexAdminClient();
+        await convex.mutation(internal.notes.createNote, {
+          visibleId: noteId,
+          imageUrl: uploadedImageUrl,
+          color: body.color,
+          x: position.x,
+          y: position.y,
+          rotation,
+          createdAt,
+          moderationStatus,
+          flagCount: 0,
+          sessionId,
+        });
+      } catch (convexError) {
+        console.error("Convex createNote mutation failed:", convexError);
+        if (uploadedImageUrl) {
+          await deleteNoteImage(uploadedImageUrl);
+        }
+        return NextResponse.json(
+          { error: "Failed to save note. Please try again." },
+          { status: 502 }
+        );
+      }
     } else {
       const note: StickyNote = {
         id: noteId,
