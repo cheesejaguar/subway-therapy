@@ -1,8 +1,15 @@
 import { ConvexHttpClient } from "convex/browser";
+import type { FunctionReference } from "convex/server";
 
 export interface ConvexAdminClient {
-  query<TResult>(queryRef: unknown, args: Record<string, unknown>): Promise<TResult>;
-  mutation<TResult>(mutationRef: unknown, args: Record<string, unknown>): Promise<TResult>;
+  query<TResult>(
+    queryRef: FunctionReference<"query">,
+    args: Record<string, unknown>
+  ): Promise<TResult>;
+  mutation<TResult>(
+    mutationRef: FunctionReference<"mutation">,
+    args: Record<string, unknown>
+  ): Promise<TResult>;
 }
 
 function getConvexUrl(): string {
@@ -15,26 +22,41 @@ function getConvexUrl(): string {
   return convexUrl;
 }
 
+function getServerSecret(): string {
+  const secret = process.env.CONVEX_SERVER_SECRET;
+  if (!secret) {
+    throw new Error("CONVEX_SERVER_SECRET is not set");
+  }
+  return secret;
+}
+
 // Create a Convex client for public server-side queries.
 export function getConvexClient(): ConvexHttpClient {
   return new ConvexHttpClient(getConvexUrl());
 }
 
-// Create a Convex admin client for internal functions.
+// Create a Convex client authorized for server-to-server calls.
+// Privileged Convex functions validate the shared `serverSecret` argument
+// against the `CONVEX_SERVER_SECRET` configured on the Convex deployment,
+// so we inject it transparently on every call here.
 export function getConvexAdminClient(): ConvexAdminClient {
-  const deployKey = process.env.CONVEX_DEPLOY_KEY;
-  if (!deployKey) {
-    throw new Error("CONVEX_DEPLOY_KEY is not set");
-  }
-
+  const serverSecret = getServerSecret();
   const client = new ConvexHttpClient(getConvexUrl());
 
-  // `setAdminAuth` is intentionally undocumented in bundled typings, but is available at runtime.
-  const adminClient = client as ConvexHttpClient & {
-    setAdminAuth: (token: string) => void;
+  return {
+    query: <TResult>(
+      queryRef: FunctionReference<"query">,
+      args: Record<string, unknown>
+    ): Promise<TResult> => {
+      return client.query(queryRef, { ...args, serverSecret }) as Promise<TResult>;
+    },
+    mutation: <TResult>(
+      mutationRef: FunctionReference<"mutation">,
+      args: Record<string, unknown>
+    ): Promise<TResult> => {
+      return client.mutation(mutationRef, { ...args, serverSecret }) as Promise<TResult>;
+    },
   };
-  adminClient.setAdminAuth(deployKey);
-  return client as unknown as ConvexAdminClient;
 }
 
 // Check if Convex is configured
@@ -43,5 +65,5 @@ export function isConvexConfigured(): boolean {
 }
 
 export function isConvexAdminConfigured(): boolean {
-  return !!process.env.NEXT_PUBLIC_CONVEX_URL && !!process.env.CONVEX_DEPLOY_KEY;
+  return !!process.env.NEXT_PUBLIC_CONVEX_URL && !!process.env.CONVEX_SERVER_SECRET;
 }

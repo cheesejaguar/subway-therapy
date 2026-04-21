@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { internal } from "../../../../../convex/_generated/api";
+import { api } from "../../../../../convex/_generated/api";
 import {
   getConvexAdminClient,
   isConvexAdminConfigured,
@@ -46,14 +46,14 @@ export async function GET(request: NextRequest) {
       const convex = getConvexAdminClient();
 
       const [convexNotes, stats] = await Promise.all([
-        convex.query<ConvexNote[]>(internal.notes.getNotesForModeration, { status }),
+        convex.query<ConvexNote[]>(api.notes.getNotesForModeration, { status }),
         convex.query<{
           total: number;
           pending: number;
           approved: number;
           rejected: number;
           flagged: number;
-        }>(internal.notes.getStats, {}),
+        }>(api.notes.getStats, {}),
       ]);
 
       const notes = convexNotes.map(mapConvexNote);

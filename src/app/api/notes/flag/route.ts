@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { internal } from "../../../../../convex/_generated/api";
+import { api } from "../../../../../convex/_generated/api";
 import {
   getConvexAdminClient,
   isConvexAdminConfigured,
@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
 
       const convex = getConvexAdminClient();
       const result = await convex.mutation<{ flagCount: number; duplicate: boolean } | null>(
-        internal.notes.flagNote,
+        api.notes.flagNote,
         {
           visibleId: noteId,
           reporterHash,

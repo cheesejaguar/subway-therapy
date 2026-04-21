@@ -1,5 +1,5 @@
-import { v } from "convex/values";
-import { internalMutation, internalQuery, query } from "./_generated/server";
+import { ConvexError, v } from "convex/values";
+import { mutation, query } from "./_generated/server";
 
 const moderationStatus = v.union(
   v.literal("pending"),
@@ -10,6 +10,27 @@ const moderationStatus = v.union(
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const FLAG_THRESHOLD = 3;
+
+// Shared-secret authorization for server-to-server calls.
+// The Next.js server passes `serverSecret` on every privileged call;
+// Convex validates it against the `CONVEX_SERVER_SECRET` environment
+// variable configured for the deployment. Public, read-only queries
+// (`getPublicNotes`, `getNotesInViewport`) do not require the secret.
+function requireServerSecret(providedSecret: string): void {
+  const expected = process.env.CONVEX_SERVER_SECRET;
+  if (!expected) {
+    throw new ConvexError({
+      code: "Misconfigured",
+      message: "CONVEX_SERVER_SECRET is not set on the Convex deployment",
+    });
+  }
+  if (providedSecret !== expected) {
+    throw new ConvexError({
+      code: "Unauthorized",
+      message: "Not authorized",
+    });
+  }
+}
 
 // Public query: only approved notes are visible on the public wall.
 export const getPublicNotes = query({
@@ -47,12 +68,14 @@ export const getNotesInViewport = query({
   },
 });
 
-// Internal query: moderation dashboard listing.
-export const getNotesForModeration = internalQuery({
+// Server-only query: moderation dashboard listing.
+export const getNotesForModeration = query({
   args: {
+    serverSecret: v.string(),
     status: v.optional(moderationStatus),
   },
   handler: async (ctx, args) => {
+    requireServerSecret(args.serverSecret);
     let notes;
     if (args.status) {
       notes = await ctx.db
@@ -74,10 +97,13 @@ export const getNotesForModeration = internalQuery({
   },
 });
 
-// Internal query: moderation dashboard stats.
-export const getStats = internalQuery({
-  args: {},
-  handler: async (ctx) => {
+// Server-only query: moderation dashboard stats.
+export const getStats = query({
+  args: {
+    serverSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireServerSecret(args.serverSecret);
     const [pending, approved, rejected, flagged] = await Promise.all([
       ctx.db
         .query("notes")
@@ -107,9 +133,10 @@ export const getStats = internalQuery({
   },
 });
 
-// Internal mutation: create a note.
-export const createNote = internalMutation({
+// Server-only mutation: create a note.
+export const createNote = mutation({
   args: {
+    serverSecret: v.string(),
     visibleId: v.string(),
     imageUrl: v.string(),
     color: v.string(),
@@ -122,18 +149,32 @@ export const createNote = internalMutation({
     sessionId: v.string(),
   },
   handler: async (ctx, args) => {
-    const noteId = await ctx.db.insert("notes", args);
+    requireServerSecret(args.serverSecret);
+    const noteId = await ctx.db.insert("notes", {
+      visibleId: args.visibleId,
+      imageUrl: args.imageUrl,
+      color: args.color,
+      x: args.x,
+      y: args.y,
+      rotation: args.rotation,
+      createdAt: args.createdAt,
+      moderationStatus: args.moderationStatus,
+      flagCount: args.flagCount,
+      sessionId: args.sessionId,
+    });
     return noteId;
   },
 });
 
-// Internal mutation: update moderation status.
-export const moderateNote = internalMutation({
+// Server-only mutation: update moderation status.
+export const moderateNote = mutation({
   args: {
+    serverSecret: v.string(),
     visibleId: v.string(),
     status: moderationStatus,
   },
   handler: async (ctx, args) => {
+    requireServerSecret(args.serverSecret);
     const notes = await ctx.db
       .query("notes")
       .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
@@ -146,13 +187,15 @@ export const moderateNote = internalMutation({
   },
 });
 
-// Internal mutation: flag note with per-reporter dedupe.
-export const flagNote = internalMutation({
+// Server-only mutation: flag note with per-reporter dedupe.
+export const flagNote = mutation({
   args: {
+    serverSecret: v.string(),
     visibleId: v.string(),
     reporterHash: v.string(),
   },
   handler: async (ctx, args) => {
+    requireServerSecret(args.serverSecret);
     const notes = await ctx.db
       .query("notes")
       .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
@@ -192,12 +235,14 @@ export const flagNote = internalMutation({
   },
 });
 
-// Internal mutation: delete a note and related flag records.
-export const deleteNote = internalMutation({
+// Server-only mutation: delete a note and related flag records.
+export const deleteNote = mutation({
   args: {
+    serverSecret: v.string(),
     visibleId: v.string(),
   },
   handler: async (ctx, args) => {
+    requireServerSecret(args.serverSecret);
     const notes = await ctx.db
       .query("notes")
       .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
@@ -218,13 +263,15 @@ export const deleteNote = internalMutation({
   },
 });
 
-// Internal query: post cooldown in milliseconds for a reporter.
-export const getSubmissionCooldown = internalQuery({
+// Server-only query: post cooldown in milliseconds for a reporter.
+export const getSubmissionCooldown = query({
   args: {
+    serverSecret: v.string(),
     reporterHash: v.string(),
     nowMs: v.number(),
   },
   handler: async (ctx, args) => {
+    requireServerSecret(args.serverSecret);
     const submissions = await ctx.db
       .query("submissions")
       .withIndex("by_reporterHash_createdAt", (q) => q.eq("reporterHash", args.reporterHash))
@@ -253,13 +300,15 @@ export const getSubmissionCooldown = internalQuery({
   },
 });
 
-// Internal mutation: record successful note submission and prune stale history.
-export const recordSubmission = internalMutation({
+// Server-only mutation: record successful note submission and prune stale history.
+export const recordSubmission = mutation({
   args: {
+    serverSecret: v.string(),
     reporterHash: v.string(),
     createdAt: v.string(),
   },
   handler: async (ctx, args) => {
+    requireServerSecret(args.serverSecret);
     await ctx.db.insert("submissions", {
       reporterHash: args.reporterHash,
       createdAt: args.createdAt,

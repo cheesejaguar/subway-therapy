@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { api, internal } from "../../../../convex/_generated/api";
+import { api } from "../../../../convex/_generated/api";
 import {
   getConvexAdminClient,
   getConvexClient,
@@ -275,7 +275,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const convex = getConvexAdminClient();
-        await convex.mutation(internal.notes.createNote, {
+        await convex.mutation(api.notes.createNote, {
           visibleId: noteId,
           imageUrl: uploadedImageUrl,
           color: body.color,

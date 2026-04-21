@@ -69,7 +69,8 @@ Open [http://localhost:3000](http://localhost:3000) to see the wall.
 | `ADMIN_SESSION_SECRET` | Recommended | Secret used to sign admin session cookies |
 | `BLOB_READ_WRITE_TOKEN` | Yes | Vercel Blob storage token |
 | `NEXT_PUBLIC_CONVEX_URL` | Yes | Convex deployment URL |
-| `CONVEX_DEPLOY_KEY` | Yes (prod) | Convex deployment key |
+| `CONVEX_DEPLOY_KEY` | Yes (prod) | Convex deployment key (used by `npx convex deploy`) |
+| `CONVEX_SERVER_SECRET` | Yes (prod) | Shared secret that authorizes server-to-server calls into privileged Convex functions. Set the same value on the Convex deployment via `npx convex env set CONVEX_SERVER_SECRET <value>`. |
 | `AI_GATEWAY_API_KEY` | No | Enables automatic AI content moderation |
 | `RATE_LIMIT_SECRET` | Recommended | Secret seed used for abuse-rate hashing |
 | `NEXT_PUBLIC_SITE_URL` | No | Site URL for SEO metadata |

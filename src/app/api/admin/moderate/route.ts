@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { internal } from "../../../../../convex/_generated/api";
+import { api } from "../../../../../convex/_generated/api";
 import {
   getConvexAdminClient,
   isConvexAdminConfigured,
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
         case "approve":
         case "reject": {
           const result = await convex.mutation<{ success: boolean } | null>(
-            internal.notes.moderateNote,
+            api.notes.moderateNote,
             {
               visibleId: noteId,
               status: action === "approve" ? "approved" : "rejected",
@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
         }
         case "delete": {
           const deleteResult = await convex.mutation<{ success: boolean; imageUrl?: string }>(
-            internal.notes.deleteNote,
+            api.notes.deleteNote,
             {
               visibleId: noteId,
             }
@@ -154,7 +154,7 @@ export async function PUT(request: NextRequest) {
               case "approve":
               case "reject": {
                 const result = await convex.mutation<{ success: boolean } | null>(
-                  internal.notes.moderateNote,
+                  api.notes.moderateNote,
                   {
                     visibleId: noteId,
                     status: action === "approve" ? "approved" : "rejected",
@@ -166,7 +166,7 @@ export async function PUT(request: NextRequest) {
                 const deleteResult = await convex.mutation<{
                   success: boolean;
                   imageUrl?: string;
-                }>(internal.notes.deleteNote, {
+                }>(api.notes.deleteNote, {
                   visibleId: noteId,
                 });
                 if (deleteResult.success && deleteResult.imageUrl) {

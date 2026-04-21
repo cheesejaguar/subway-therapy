@@ -3,7 +3,7 @@ import type { ResponseCookie } from "next/dist/compiled/@edge-runtime/cookies";
 import { SESSION_COOKIE_NAME, LAST_NOTE_COOKIE_NAME } from "./types";
 import { getReporterHashes } from "./abuse";
 import { getConvexAdminClient, isConvexAdminConfigured } from "./convex";
-import { internal } from "../../convex/_generated/api";
+import { api } from "../../convex/_generated/api";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ONE_YEAR_MS = 365 * ONE_DAY_MS;
@@ -73,7 +73,7 @@ export async function canUserPostNote(): Promise<{
     try {
       const convex = getConvexAdminClient();
       const result = await convex.query<{ timeUntilNextPostMs: number }>(
-        internal.notes.getSubmissionCooldown,
+        api.notes.getSubmissionCooldown,
         {
           reporterHash: dailyReporterHash,
           nowMs,
@@ -120,7 +120,7 @@ export async function recordNoteSubmission(): Promise<void> {
   if (isConvexAdminConfigured()) {
     try {
       const convex = getConvexAdminClient();
-      await convex.mutation<null>(internal.notes.recordSubmission, {
+      await convex.mutation<null>(api.notes.recordSubmission, {
         reporterHash: dailyReporterHash,
         createdAt: timestampIso,
       });

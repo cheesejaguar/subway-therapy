@@ -7,12 +7,14 @@ import {
 } from "./convex";
 import { ConvexHttpClient } from "convex/browser";
 
-const setAdminAuthMock = vi.fn();
+const queryMock = vi.fn();
+const mutationMock = vi.fn();
 
 vi.mock("convex/browser", () => ({
   ConvexHttpClient: vi.fn(function ConvexHttpClientMock() {
     return {
-      setAdminAuth: setAdminAuthMock,
+      query: queryMock,
+      mutation: mutationMock,
     };
   }),
 }));
@@ -35,15 +37,15 @@ describe("convex", () => {
   });
 
   describe("isConvexAdminConfigured", () => {
-    it("should return true when URL and deploy key are set", () => {
+    it("should return true when URL and server secret are set", () => {
       vi.stubEnv("NEXT_PUBLIC_CONVEX_URL", "https://test.convex.cloud");
-      vi.stubEnv("CONVEX_DEPLOY_KEY", "deploy-key");
+      vi.stubEnv("CONVEX_SERVER_SECRET", "secret");
       expect(isConvexAdminConfigured()).toBe(true);
     });
 
-    it("should return false when deploy key is missing", () => {
+    it("should return false when server secret is missing", () => {
       vi.stubEnv("NEXT_PUBLIC_CONVEX_URL", "https://test.convex.cloud");
-      vi.stubEnv("CONVEX_DEPLOY_KEY", "");
+      vi.stubEnv("CONVEX_SERVER_SECRET", "");
       expect(isConvexAdminConfigured()).toBe(false);
     });
   });
@@ -62,20 +64,35 @@ describe("convex", () => {
   });
 
   describe("getConvexAdminClient", () => {
-    it("should set admin auth with deploy key", () => {
+    it("should inject the server secret into queries", async () => {
       vi.stubEnv("NEXT_PUBLIC_CONVEX_URL", "https://test.convex.cloud");
-      vi.stubEnv("CONVEX_DEPLOY_KEY", "deploy-key");
+      vi.stubEnv("CONVEX_SERVER_SECRET", "shhh");
+      queryMock.mockResolvedValue({ result: true });
 
-      getConvexAdminClient();
+      const client = getConvexAdminClient();
+      const ref = { dummy: "query-ref" } as never;
+      await client.query(ref, { foo: "bar" });
 
       expect(ConvexHttpClient).toHaveBeenCalledWith("https://test.convex.cloud");
-      expect(setAdminAuthMock).toHaveBeenCalledWith("deploy-key");
+      expect(queryMock).toHaveBeenCalledWith(ref, { foo: "bar", serverSecret: "shhh" });
     });
 
-    it("should throw when deploy key is missing", () => {
+    it("should inject the server secret into mutations", async () => {
       vi.stubEnv("NEXT_PUBLIC_CONVEX_URL", "https://test.convex.cloud");
-      vi.stubEnv("CONVEX_DEPLOY_KEY", "");
-      expect(() => getConvexAdminClient()).toThrow("CONVEX_DEPLOY_KEY is not set");
+      vi.stubEnv("CONVEX_SERVER_SECRET", "shhh");
+      mutationMock.mockResolvedValue({ ok: true });
+
+      const client = getConvexAdminClient();
+      const ref = { dummy: "mutation-ref" } as never;
+      await client.mutation(ref, { foo: "bar" });
+
+      expect(mutationMock).toHaveBeenCalledWith(ref, { foo: "bar", serverSecret: "shhh" });
+    });
+
+    it("should throw when server secret is missing", () => {
+      vi.stubEnv("NEXT_PUBLIC_CONVEX_URL", "https://test.convex.cloud");
+      vi.stubEnv("CONVEX_SERVER_SECRET", "");
+      expect(() => getConvexAdminClient()).toThrow("CONVEX_SERVER_SECRET is not set");
     });
   });
 });
