@@ -35,19 +35,24 @@ export const getApprovedNotesInRange = query({
   },
   handler: async (ctx, args) => {
     const padding = 200;
-    const notes = await ctx.db
+    // Stream the full x-range rather than using a fixed .take() cap, which
+    // would silently truncate dense tiles. Convex's per-query document scan
+    // limit is the loud backstop, and it sits far above the physical note
+    // density a 2,000px slice of wall can hold.
+    const notes = [];
+    for await (const note of ctx.db
       .query("notes")
       .withIndex("by_status_x", (q) =>
         q
           .eq("moderationStatus", "approved")
           .gte("x", args.minX - padding)
           .lte("x", args.maxX + padding)
-      )
-      .take(1000);
-
-    return notes.filter(
-      (note) => note.y >= args.minY - padding && note.y <= args.maxY + padding
-    );
+      )) {
+      if (note.y >= args.minY - padding && note.y <= args.maxY + padding) {
+        notes.push(note);
+      }
+    }
+    return notes;
   },
 });
 
@@ -284,7 +289,70 @@ export const getSubmissionCooldown = internalQuery({
   },
 });
 
+// Internal mutation: atomically check the daily cooldown and record the
+// submission in one serializable transaction, closing the check-then-write
+// race between concurrent posts from the same reporter.
+export const reserveSubmission = internalMutation({
+  args: {
+    reporterHash: v.string(),
+    createdAt: v.string(),
+    nowMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const submissions = await ctx.db
+      .query("submissions")
+      .withIndex("by_reporterHash_createdAt", (q) =>
+        q.eq("reporterHash", args.reporterHash)
+      )
+      .collect();
+
+    let latestTimestamp = 0;
+    for (const submission of submissions) {
+      const ts = new Date(submission.createdAt).getTime();
+      if (ts > latestTimestamp) latestTimestamp = ts;
+    }
+
+    if (latestTimestamp) {
+      const remaining = ONE_DAY_MS - (args.nowMs - latestTimestamp);
+      if (remaining > 0) {
+        return { reserved: false as const, timeUntilNextPostMs: remaining };
+      }
+    }
+
+    const submissionId = await ctx.db.insert("submissions", {
+      reporterHash: args.reporterHash,
+      createdAt: args.createdAt,
+    });
+
+    // Prune stale history while we hold the reporter's rows anyway.
+    const cutoff = args.nowMs - ONE_DAY_MS * 7;
+    await Promise.all(
+      submissions
+        .filter((submission) => new Date(submission.createdAt).getTime() < cutoff)
+        .map((submission) => ctx.db.delete(submission._id))
+    );
+
+    return { reserved: true as const, submissionId };
+  },
+});
+
+// Internal mutation: roll back a reservation whose note failed downstream
+// (image upload or persistence error), restoring the reporter's daily slot.
+export const releaseSubmission = internalMutation({
+  args: {
+    submissionId: v.id("submissions"),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db.get(args.submissionId);
+    if (existing) {
+      await ctx.db.delete(args.submissionId);
+    }
+    return null;
+  },
+});
+
 // Internal mutation: record successful note submission and prune stale history.
+// Legacy path kept for deployment skew: an older Next deployment still calls it.
 export const recordSubmission = internalMutation({
   args: {
     reporterHash: v.string(),

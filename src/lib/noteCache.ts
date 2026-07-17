@@ -11,10 +11,6 @@ import { PublicStickyNote, ViewportBounds, WALL_CONFIG } from "./types";
 
 export const FETCH_TILE_WIDTH = 2000;
 
-// Matches the server-side query padding: a tile response includes notes up to
-// 200px outside the requested bounds, so only prune within the shrunken box.
-export const SERVER_QUERY_PADDING = 200;
-
 export const TILE_COUNT = Math.ceil(WALL_CONFIG.wallWidth / FETCH_TILE_WIDTH);
 
 // Tile indexes (inclusive) covering the given viewport bounds.
@@ -42,9 +38,12 @@ export function tileToBounds(tile: number): ViewportBounds {
 }
 
 // Merge a tile response into the cache. Upserts every returned note, and
-// removes cached notes that lie strictly inside the tile (minus the server
-// padding) but are absent from the response — those were deleted or
-// moderated away.
+// removes cached notes that are absent from the response and owned by this
+// tile. Ownership is the exact half-open interval [minX, maxX) — the server
+// queries with 200px of padding on each side, so its response is authoritative
+// for the whole interval, and every x coordinate has exactly one owner tile.
+// Without total ownership, deleted notes near tile borders would linger in
+// the cache forever.
 export function mergeNotesIntoCache(
   cache: Map<string, PublicStickyNote>,
   notes: PublicStickyNote[],
@@ -52,14 +51,11 @@ export function mergeNotesIntoCache(
 ): void {
   const returnedIds = new Set(notes.map((note) => note.id));
 
-  const innerMinX = tileBounds.minX + SERVER_QUERY_PADDING;
-  const innerMaxX = tileBounds.maxX - SERVER_QUERY_PADDING;
-
   for (const [id, note] of cache) {
     if (
       !returnedIds.has(id) &&
-      note.x > innerMinX &&
-      note.x < innerMaxX
+      note.x >= tileBounds.minX &&
+      note.x < tileBounds.maxX
     ) {
       cache.delete(id);
     }

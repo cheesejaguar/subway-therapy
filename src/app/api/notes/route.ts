@@ -18,7 +18,9 @@ import {
   getSessionCookieConfig,
   canUserPostNote,
   recordNoteSubmission,
+  reserveNoteSubmission,
   getNoteSubmissionCookieConfig,
+  type SubmissionReservation,
 } from "@/lib/session";
 import { uploadNoteImage, deleteNoteImage } from "@/lib/blob";
 import {
@@ -163,6 +165,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   let uploadedImageUrl: string | null = null;
+  let reservation: SubmissionReservation | null = null;
 
   try {
     const postRateLimit = await checkPostAttemptRateLimit();
@@ -278,6 +281,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Atomically claim the reporter's daily slot BEFORE any paid work.
+    // canUserPostNote() above is a cheap early check, but only this
+    // reservation is race-free under concurrent posts.
+    reservation = await reserveNoteSubmission();
+    if (!reservation.reserved) {
+      return noStoreJson(
+        {
+          error: "Only one note per person per day!",
+          timeUntilNextPost: reservation.timeUntilNextPost,
+        },
+        429
+      );
+    }
+
     // Generate note ID
     const noteId = crypto.randomUUID();
 
@@ -286,10 +303,12 @@ export async function POST(request: NextRequest) {
       uploadedImageUrl = await uploadNoteImage(body.imageData, noteId);
     } catch (uploadError) {
       console.error("Failed to upload image:", uploadError);
+      await reservation.release();
       return noStoreJson({ error: "Failed to upload image" }, 500);
     }
 
     if (!uploadedImageUrl) {
+      await reservation.release();
       return noStoreJson({ error: "Failed to upload image" }, 500);
     }
 
@@ -342,6 +361,7 @@ export async function POST(request: NextRequest) {
         if (uploadedImageUrl) {
           await deleteNoteImage(uploadedImageUrl);
         }
+        await reservation.release();
         return noStoreJson({ error: "Failed to save note. Please try again." }, 502);
       }
     } else {
@@ -360,9 +380,16 @@ export async function POST(request: NextRequest) {
       await createNoteInMemory(note);
     }
 
-    // Record the submission server-side so the one-note-per-day limit holds
-    // even when the client clears its cookies.
-    await recordNoteSubmission();
+    // The note now exists, so the daily slot is spent for good: clear the
+    // reservation handle so a later incidental error can't roll it back.
+    const reservationMode = reservation.mode;
+    reservation = null;
+
+    // Under deployment skew the atomic reservation isn't available; fall back
+    // to recording the submission after success, like the pre-reservation flow.
+    if (reservationMode === "legacy") {
+      await recordNoteSubmission();
+    }
 
     // Generate appropriate message based on moderation status
     let message: string;
@@ -410,6 +437,9 @@ export async function POST(request: NextRequest) {
   } catch (routeError) {
     if (uploadedImageUrl) {
       await deleteNoteImage(uploadedImageUrl);
+    }
+    if (reservation?.reserved) {
+      await reservation.release();
     }
 
     console.error("Error creating note:", routeError);

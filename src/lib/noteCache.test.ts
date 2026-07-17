@@ -88,26 +88,42 @@ describe("noteCache", () => {
       expect(cache.size).toBe(2);
     });
 
-    it("prunes notes missing from the response inside the padded tile interior", () => {
+    it("prunes notes missing from the response anywhere in the owned tile interval", () => {
       const cache = new Map<string, PublicStickyNote>();
-      const tile = tileToBounds(2); // 4000..6000
+      const tile = tileToBounds(2); // [4000, 6000)
       mergeNotesIntoCache(cache, [makeNote("gone", 5000)], tile);
 
       mergeNotesIntoCache(cache, [], tile);
       expect(cache.has("gone")).toBe(false);
     });
 
-    it("does not prune notes near tile borders or in other tiles", () => {
+    it("prunes deleted notes near tile borders — every x has exactly one owner", () => {
       const cache = new Map<string, PublicStickyNote>();
-      const tile = tileToBounds(2); // 4000..6000
+      const tile = tileToBounds(2); // [4000, 6000)
 
-      // Within the 200px server padding of the border: keep.
-      cache.set("border", makeNote("border", 4100));
+      // Near the borders but inside the owned interval: prune when absent.
+      cache.set("left-edge", makeNote("left-edge", 4100));
+      cache.set("right-edge", makeNote("right-edge", 5900));
+      // Exactly on minX: owned by this tile (half-open interval).
+      cache.set("on-min", makeNote("on-min", 4000));
+
+      mergeNotesIntoCache(cache, [], tile);
+      expect(cache.has("left-edge")).toBe(false);
+      expect(cache.has("right-edge")).toBe(false);
+      expect(cache.has("on-min")).toBe(false);
+    });
+
+    it("does not prune notes owned by other tiles", () => {
+      const cache = new Map<string, PublicStickyNote>();
+      const tile = tileToBounds(2); // [4000, 6000)
+
+      // maxX is owned by the NEXT tile (half-open interval): keep.
+      cache.set("on-max", makeNote("on-max", 6000));
       // Entirely different tile: keep.
       cache.set("elsewhere", makeNote("elsewhere", 20000));
 
       mergeNotesIntoCache(cache, [], tile);
-      expect(cache.has("border")).toBe(true);
+      expect(cache.has("on-max")).toBe(true);
       expect(cache.has("elsewhere")).toBe(true);
     });
   });

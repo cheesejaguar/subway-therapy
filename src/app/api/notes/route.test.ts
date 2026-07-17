@@ -34,6 +34,7 @@ vi.mock("@/lib/session", () => ({
   })),
   canUserPostNote: vi.fn(),
   recordNoteSubmission: vi.fn(),
+  reserveNoteSubmission: vi.fn(),
   getNoteSubmissionCookieConfig: vi.fn(() => ({
     name: "last_note_time",
     value: new Date().toISOString(),
@@ -295,6 +296,11 @@ describe("POST /api/notes", () => {
     vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
     vi.mocked(abuse.checkPostAttemptRateLimit).mockResolvedValue({ allowed: true });
     vi.mocked(session.canUserPostNote).mockResolvedValue({ canPost: true });
+    vi.mocked(session.reserveNoteSubmission).mockResolvedValue({
+      reserved: true,
+      mode: "atomic",
+      release: vi.fn(),
+    });
     vi.mocked(session.getOrCreateSessionId).mockResolvedValue("test-session");
     // getSessionCookieConfig and getNoteSubmissionCookieConfig are already mocked in vi.mock setup
     vi.mocked(blob.uploadNoteImage).mockResolvedValue("https://blob.test/image.png");
@@ -442,7 +448,79 @@ describe("POST /api/notes", () => {
     expect(data.note.moderationStatus).toBe("approved");
     expect(data.message).toContain("approved");
     expect(response.headers.get("Cache-Control")).toBe("no-store");
-    // Server-side daily limit must be recorded on success.
+    // The atomic reservation IS the daily-limit record.
+    expect(session.reserveNoteSubmission).toHaveBeenCalledTimes(1);
+    expect(session.recordNoteSubmission).not.toHaveBeenCalled();
+  });
+
+  it("should return 429 when the atomic reservation is denied", async () => {
+    vi.mocked(session.reserveNoteSubmission).mockResolvedValue({
+      reserved: false,
+      timeUntilNextPost: 12345,
+      mode: "atomic",
+      release: vi.fn(),
+    });
+
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+      },
+    });
+
+    const response = await POST(request);
+    const data = await parseResponse<{ error: string; timeUntilNextPost: number }>(
+      response
+    );
+
+    expect(response.status).toBe(429);
+    expect(data.error).toContain("one note per person per day");
+    expect(data.timeUntilNextPost).toBe(12345);
+    expect(blob.uploadNoteImage).not.toHaveBeenCalled();
+  });
+
+  it("should release the reservation when the upload fails", async () => {
+    const release = vi.fn();
+    vi.mocked(session.reserveNoteSubmission).mockResolvedValue({
+      reserved: true,
+      mode: "atomic",
+      release,
+    });
+    vi.mocked(blob.uploadNoteImage).mockRejectedValue(new Error("Upload failed"));
+
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+      },
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(500);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("should record the submission after success in legacy reservation mode", async () => {
+    vi.mocked(session.reserveNoteSubmission).mockResolvedValue({
+      reserved: true,
+      mode: "legacy",
+      release: vi.fn(),
+    });
+
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+      },
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
     expect(session.recordNoteSubmission).toHaveBeenCalledTimes(1);
   });
 
@@ -603,10 +681,11 @@ describe("POST /api/notes", () => {
 
     expect(response.status).toBe(400);
     expect(data.error).toContain("overlap");
-    // The overlap check runs before any paid work: no blob upload, no AI call.
+    // The overlap check runs before any paid work: no blob upload, no AI
+    // call, and no daily-slot reservation.
     expect(blob.uploadNoteImage).not.toHaveBeenCalled();
     expect(moderation.moderateImage).not.toHaveBeenCalled();
-    expect(session.recordNoteSubmission).not.toHaveBeenCalled();
+    expect(session.reserveNoteSubmission).not.toHaveBeenCalled();
   });
 
   it("should use random position when not provided", async () => {
@@ -756,6 +835,10 @@ describe("POST /api/notes", () => {
     expect(response.status).toBe(502);
     expect(data.error).toBe("Failed to save note. Please try again.");
     expect(blob.deleteNoteImage).toHaveBeenCalledWith("https://blob.test/image.png");
+    // The daily slot is returned when persistence fails.
+    const reservationResult = await vi.mocked(session.reserveNoteSubmission).mock
+      .results[0].value;
+    expect(reservationResult.release).toHaveBeenCalledTimes(1);
   });
 
   it("should return 503 when Convex is configured but admin credentials are missing", async () => {
