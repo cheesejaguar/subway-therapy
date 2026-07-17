@@ -6,6 +6,7 @@ import {
   getOrCreateSessionId,
   canUserPostNote,
   recordNoteSubmission,
+  reserveNoteSubmission,
   getReporterHash,
 } from "./session";
 import { cookies } from "next/headers";
@@ -238,8 +239,109 @@ describe("session", () => {
     });
   });
 
+  describe("reserveNoteSubmission", () => {
+    function mockEmptyCookies() {
+      vi.mocked(cookies).mockResolvedValue({
+        get: vi.fn(() => undefined),
+        set: vi.fn(),
+      } as never);
+    }
+
+    it("reserves and then denies the second attempt in memory", async () => {
+      mockEmptyCookies();
+      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
+      vi.mocked(abuse.getReporterHashes).mockResolvedValue({
+        dailyReporterHash: "reserve-hash-1",
+        requestKey: "key",
+      });
+
+      const first = await reserveNoteSubmission();
+      expect(first.reserved).toBe(true);
+      expect(first.mode).toBe("atomic");
+
+      const second = await reserveNoteSubmission();
+      expect(second.reserved).toBe(false);
+      expect(second.timeUntilNextPost).toBeGreaterThan(0);
+    });
+
+    it("release() returns the daily slot in memory", async () => {
+      mockEmptyCookies();
+      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
+      vi.mocked(abuse.getReporterHashes).mockResolvedValue({
+        dailyReporterHash: "reserve-hash-2",
+        requestKey: "key",
+      });
+
+      const first = await reserveNoteSubmission();
+      expect(first.reserved).toBe(true);
+      await first.release();
+
+      const second = await reserveNoteSubmission();
+      expect(second.reserved).toBe(true);
+    });
+
+    it("uses the atomic Convex mutation when configured", async () => {
+      mockEmptyCookies();
+      vi.mocked(abuse.getReporterHashes).mockResolvedValue({
+        dailyReporterHash: "reserve-hash-3",
+        requestKey: "key",
+      });
+      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
+      const mockMutation = vi
+        .fn()
+        .mockResolvedValue({ reserved: true, submissionId: "sub-1" });
+      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
+        query: vi.fn(),
+        mutation: mockMutation,
+      } as never);
+
+      const reservation = await reserveNoteSubmission();
+      expect(reservation.reserved).toBe(true);
+      expect(reservation.mode).toBe("atomic");
+      expect(mockMutation).toHaveBeenCalledTimes(1);
+
+      // release() rolls back via the release mutation.
+      await reservation.release();
+      expect(mockMutation).toHaveBeenCalledTimes(2);
+    });
+
+    it("propagates a Convex denial", async () => {
+      mockEmptyCookies();
+      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
+      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
+        query: vi.fn(),
+        mutation: vi
+          .fn()
+          .mockResolvedValue({ reserved: false, timeUntilNextPostMs: 5000 }),
+      } as never);
+
+      const reservation = await reserveNoteSubmission();
+      expect(reservation.reserved).toBe(false);
+      expect(reservation.timeUntilNextPost).toBe(5000);
+    });
+
+    it("falls back to legacy mode when the mutation is unavailable", async () => {
+      mockEmptyCookies();
+      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
+      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
+        query: vi.fn(),
+        mutation: vi
+          .fn()
+          .mockRejectedValue(new Error("Could not find public function")),
+      } as never);
+
+      const reservation = await reserveNoteSubmission();
+      expect(reservation.reserved).toBe(true);
+      expect(reservation.mode).toBe("legacy");
+    });
+  });
+
   describe("getReporterHash", () => {
     it("should return the daily reporter hash", async () => {
+      vi.mocked(abuse.getReporterHashes).mockResolvedValue({
+        dailyReporterHash: "hash-abc",
+        requestKey: "key-abc",
+      });
       const hash = await getReporterHash("session-123");
       expect(hash).toBe("hash-abc");
     });

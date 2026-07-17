@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   moderateImage,
+  isModerationConfigured,
   estimateTokens,
   calculateModerationCost,
 } from "./moderation";
@@ -12,34 +13,60 @@ vi.mock("ai", () => ({
   createGateway: vi.fn(() => vi.fn(() => "mock-model")),
 }));
 
+function mockGenerateTextResult(
+  text: string,
+  usage: { inputTokens: number; outputTokens: number } | null = {
+    inputTokens: 1200,
+    outputTokens: 50,
+  }
+) {
+  vi.mocked(generateText).mockResolvedValue({
+    text,
+    usage: usage ?? undefined,
+    finishReason: "stop",
+    response: { id: "test", timestamp: new Date(), modelId: "test-model" },
+    request: {},
+    toolCalls: [],
+    toolResults: [],
+    warnings: [],
+    providerMetadata: undefined,
+    steps: [],
+  } as unknown as Awaited<ReturnType<typeof generateText>>);
+}
+
 describe("moderation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv("AI_GATEWAY_API_KEY", "test-gateway-key");
+  });
+
+  describe("isModerationConfigured", () => {
+    it("should be true when AI_GATEWAY_API_KEY is set", () => {
+      expect(isModerationConfigured()).toBe(true);
+    });
+
+    it("should be false when AI_GATEWAY_API_KEY is empty", () => {
+      vi.stubEnv("AI_GATEWAY_API_KEY", "");
+      expect(isModerationConfigured()).toBe(false);
+    });
   });
 
   describe("moderateImage", () => {
+    it("should skip the AI call entirely when no API key is configured", async () => {
+      vi.stubEnv("AI_GATEWAY_API_KEY", "");
+
+      const result = await moderateImage("data:image/png;base64,test");
+
+      expect(generateText).not.toHaveBeenCalled();
+      expect(result.approved).toBe(false);
+      expect(result.confidence).toBe(0);
+      expect(result.reason).toContain("not configured");
+    });
+
     it("should return approved for appropriate content", async () => {
-      vi.mocked(generateText).mockResolvedValue({
-        text: '{"decision": "APPROVED", "reason": "Appropriate content", "confidence": 0.95}',
-        usage: {
-          promptTokens: 1200,
-          completionTokens: 50,
-          inputTokens: 1200,
-          outputTokens: 50,
-        },
-        finishReason: "stop",
-        response: {
-          id: "test",
-          timestamp: new Date(),
-          modelId: "test-model",
-        },
-        request: {},
-        toolCalls: [],
-        toolResults: [],
-        warnings: [],
-        providerMetadata: undefined,
-        steps: [],
-      } as unknown as Awaited<ReturnType<typeof generateText>>);
+      mockGenerateTextResult(
+        '{"decision": "APPROVED", "reason": "Appropriate content", "confidence": 0.95}'
+      );
 
       const result = await moderateImage("data:image/png;base64,test");
 
@@ -48,26 +75,27 @@ describe("moderation", () => {
       expect(result.confidence).toBe(0.95);
     });
 
+    it("should call generateText with bounded output, retries, and a timeout", async () => {
+      mockGenerateTextResult(
+        '{"decision": "APPROVED", "reason": "OK", "confidence": 0.9}'
+      );
+
+      await moderateImage("data:image/png;base64,test");
+
+      expect(generateText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          maxOutputTokens: 200,
+          temperature: 0,
+          maxRetries: 1,
+          abortSignal: expect.any(AbortSignal),
+        })
+      );
+    });
+
     it("should return rejected for inappropriate content", async () => {
-      vi.mocked(generateText).mockResolvedValue({
-        text: '{"decision": "REJECTED", "reason": "Contains inappropriate content", "confidence": 0.9}',
-        usage: {
-          inputTokens: 1200,
-          outputTokens: 50,
-        },
-        finishReason: "stop",
-        response: {
-          id: "test",
-          timestamp: new Date(),
-          modelId: "test-model",
-        },
-        request: {},
-        toolCalls: [],
-        toolResults: [],
-        warnings: [],
-        providerMetadata: undefined,
-        steps: [],
-      } as unknown as Awaited<ReturnType<typeof generateText>>);
+      mockGenerateTextResult(
+        '{"decision": "REJECTED", "reason": "Contains inappropriate content", "confidence": 0.9}'
+      );
 
       const result = await moderateImage("data:image/png;base64,test");
 
@@ -77,25 +105,9 @@ describe("moderation", () => {
     });
 
     it("should handle JSON in markdown code blocks", async () => {
-      vi.mocked(generateText).mockResolvedValue({
-        text: '```json\n{"decision": "APPROVED", "reason": "Safe content", "confidence": 0.85}\n```',
-        usage: {
-          inputTokens: 1200,
-          outputTokens: 60,
-        },
-        finishReason: "stop",
-        response: {
-          id: "test",
-          timestamp: new Date(),
-          modelId: "test-model",
-        },
-        request: {},
-        toolCalls: [],
-        toolResults: [],
-        warnings: [],
-        providerMetadata: undefined,
-        steps: [],
-      } as unknown as Awaited<ReturnType<typeof generateText>>);
+      mockGenerateTextResult(
+        '```json\n{"decision": "APPROVED", "reason": "Safe content", "confidence": 0.85}\n```'
+      );
 
       const result = await moderateImage("data:image/png;base64,test");
 
@@ -103,58 +115,62 @@ describe("moderation", () => {
       expect(result.reason).toBe("Safe content");
     });
 
-    it("should handle unstructured response with APPROVED keyword", async () => {
-      vi.mocked(generateText).mockResolvedValue({
-        text: "This content looks APPROVED to me, it seems fine.",
-        usage: {
-          inputTokens: 1200,
-          outputTokens: 20,
-        },
-        finishReason: "stop",
-        response: {
-          id: "test",
-          timestamp: new Date(),
-          modelId: "test-model",
-        },
-        request: {},
-        toolCalls: [],
-        toolResults: [],
-        warnings: [],
-        providerMetadata: undefined,
-        steps: [],
-      } as unknown as Awaited<ReturnType<typeof generateText>>);
-
-      const result = await moderateImage("data:image/png;base64,test");
-
-      expect(result.approved).toBe(true);
-      expect(result.confidence).toBe(0.5); // Low confidence for unparseable response
-    });
-
-    it("should handle unstructured response without APPROVED keyword", async () => {
-      vi.mocked(generateText).mockResolvedValue({
-        text: "This content should be REJECTED due to violations.",
-        usage: {
-          inputTokens: 1200,
-          outputTokens: 20,
-        },
-        finishReason: "stop",
-        response: {
-          id: "test",
-          timestamp: new Date(),
-          modelId: "test-model",
-        },
-        request: {},
-        toolCalls: [],
-        toolResults: [],
-        warnings: [],
-        providerMetadata: undefined,
-        steps: [],
-      } as unknown as Awaited<ReturnType<typeof generateText>>);
+    it("should treat unparseable free text as unapproved with zero confidence", async () => {
+      // A note image containing the word "APPROVED" must not be able to bias
+      // the outcome — no keyword fallback.
+      mockGenerateTextResult("This content looks APPROVED to me, it seems fine.");
 
       const result = await moderateImage("data:image/png;base64,test");
 
       expect(result.approved).toBe(false);
-      expect(result.confidence).toBe(0.5);
+      expect(result.confidence).toBe(0);
+      expect(result.reason).toBe("Could not parse moderation response");
+    });
+
+    it("should treat an invalid decision value as unparseable", async () => {
+      mockGenerateTextResult(
+        '{"decision": "MAYBE", "reason": "unsure", "confidence": 0.9}'
+      );
+
+      const result = await moderateImage("data:image/png;base64,test");
+
+      expect(result.approved).toBe(false);
+      expect(result.confidence).toBe(0);
+    });
+
+    it("should clamp out-of-range confidence values", async () => {
+      mockGenerateTextResult(
+        '{"decision": "APPROVED", "reason": "OK", "confidence": 1.5}'
+      );
+      let result = await moderateImage("data:image/png;base64,test");
+      expect(result.confidence).toBe(1);
+
+      mockGenerateTextResult(
+        '{"decision": "REJECTED", "reason": "bad", "confidence": -3}'
+      );
+      result = await moderateImage("data:image/png;base64,test");
+      expect(result.confidence).toBe(0);
+    });
+
+    it("should zero non-numeric confidence values", async () => {
+      mockGenerateTextResult(
+        '{"decision": "APPROVED", "reason": "OK", "confidence": "high"}'
+      );
+
+      const result = await moderateImage("data:image/png;base64,test");
+
+      expect(result.approved).toBe(true);
+      expect(result.confidence).toBe(0);
+    });
+
+    it("should truncate excessively long reasons", async () => {
+      mockGenerateTextResult(
+        `{"decision": "REJECTED", "reason": "${"x".repeat(1000)}", "confidence": 0.9}`
+      );
+
+      const result = await moderateImage("data:image/png;base64,test");
+
+      expect(result.reason.length).toBe(300);
     });
 
     it("should return safe defaults on API error", async () => {
@@ -170,25 +186,10 @@ describe("moderation", () => {
     });
 
     it("should track token usage", async () => {
-      vi.mocked(generateText).mockResolvedValue({
-        text: '{"decision": "APPROVED", "reason": "OK", "confidence": 0.9}',
-        usage: {
-          inputTokens: 1500,
-          outputTokens: 75,
-        },
-        finishReason: "stop",
-        response: {
-          id: "test",
-          timestamp: new Date(),
-          modelId: "test-model",
-        },
-        request: {},
-        toolCalls: [],
-        toolResults: [],
-        warnings: [],
-        providerMetadata: undefined,
-        steps: [],
-      } as unknown as Awaited<ReturnType<typeof generateText>>);
+      mockGenerateTextResult(
+        '{"decision": "APPROVED", "reason": "OK", "confidence": 0.9}',
+        { inputTokens: 1500, outputTokens: 75 }
+      );
 
       const result = await moderateImage("data:image/png;base64,test");
 
@@ -197,22 +198,10 @@ describe("moderation", () => {
     });
 
     it("should handle missing usage data", async () => {
-      vi.mocked(generateText).mockResolvedValue({
-        text: '{"decision": "APPROVED", "reason": "OK", "confidence": 0.9}',
-        usage: undefined,
-        finishReason: "stop",
-        response: {
-          id: "test",
-          timestamp: new Date(),
-          modelId: "test-model",
-        },
-        request: {},
-        toolCalls: [],
-        toolResults: [],
-        warnings: [],
-        providerMetadata: undefined,
-        steps: [],
-      } as unknown as Awaited<ReturnType<typeof generateText>>);
+      mockGenerateTextResult(
+        '{"decision": "APPROVED", "reason": "OK", "confidence": 0.9}',
+        null
+      );
 
       const result = await moderateImage("data:image/png;base64,test");
 

@@ -4,9 +4,15 @@ import {
   INK_COLORS,
   WALL_CONFIG,
   mapConvexNote,
+  clampNoteToWall,
+  calculateOverlapPercentage,
+  getMaxOverlapWithNotes,
+  isPlacementValid,
+  toPublicStickyNote,
   type ConvexNote,
   type NoteColor,
   type InkColor,
+  type StickyNote,
 } from "./types";
 
 describe("types", () => {
@@ -178,6 +184,101 @@ describe("types", () => {
         const result = mapConvexNote(convexNote);
         expect(result.color).toBe(color);
       });
+    });
+
+    it("clamps out-of-bounds legacy coordinates onto the wall", () => {
+      const convexNote: ConvexNote = {
+        visibleId: "legacy",
+        imageUrl: "",
+        color: "yellow",
+        x: -3.5,
+        y: 5439.9,
+        rotation: 0,
+        createdAt: "",
+        moderationStatus: "approved",
+        flagCount: 0,
+        sessionId: "",
+      };
+
+      const result = mapConvexNote(convexNote);
+      expect(result.x).toBe(0);
+      expect(result.y).toBe(WALL_CONFIG.wallHeight - WALL_CONFIG.noteHeight);
+    });
+  });
+
+  describe("clampNoteToWall", () => {
+    it("returns the same object when already in bounds", () => {
+      const note = { x: 300000, y: 2000 };
+      expect(clampNoteToWall(note)).toBe(note);
+    });
+
+    it("clamps negative coordinates to zero", () => {
+      expect(clampNoteToWall({ x: -3.5, y: -100 })).toEqual({ x: 0, y: 0 });
+    });
+
+    it("clamps coordinates beyond the wall's far edges", () => {
+      const clamped = clampNoteToWall({ x: 999999, y: 5439 });
+      expect(clamped.x).toBe(WALL_CONFIG.wallWidth - WALL_CONFIG.noteWidth);
+      expect(clamped.y).toBe(WALL_CONFIG.wallHeight - WALL_CONFIG.noteHeight);
+    });
+  });
+
+  describe("overlap math", () => {
+    it("returns 0 when notes do not intersect", () => {
+      expect(calculateOverlapPercentage(0, 0, 150, 150)).toBe(0);
+      expect(calculateOverlapPercentage(0, 0, 1000, 0)).toBe(0);
+    });
+
+    it("returns 0 when notes only touch at a corner or edge", () => {
+      expect(calculateOverlapPercentage(0, 0, 150, 0)).toBe(0);
+      expect(calculateOverlapPercentage(0, 0, 150, 150)).toBe(0);
+    });
+
+    it("returns 1 for identical positions", () => {
+      expect(calculateOverlapPercentage(100, 100, 100, 100)).toBe(1);
+    });
+
+    it("computes a partial overlap exactly", () => {
+      // Shift by half the note width: overlap area = 75 * 150 = half.
+      expect(calculateOverlapPercentage(0, 0, 75, 0)).toBeCloseTo(0.5);
+      // Shift by 75 in both axes: quarter overlap.
+      expect(calculateOverlapPercentage(0, 0, 75, 75)).toBeCloseTo(0.25);
+    });
+
+    it("getMaxOverlapWithNotes returns the worst overlap", () => {
+      const existing = [
+        { x: 1000, y: 1000 }, // no overlap
+        { x: 75, y: 0 }, // 50%
+        { x: 75, y: 75 }, // 25%
+      ];
+      expect(getMaxOverlapWithNotes(0, 0, existing)).toBeCloseTo(0.5);
+      expect(getMaxOverlapWithNotes(0, 0, [])).toBe(0);
+    });
+
+    it("isPlacementValid honors the max overlap threshold", () => {
+      expect(isPlacementValid(0, 0, [{ x: 75, y: 75 }])).toBe(true); // exactly 25%
+      expect(isPlacementValid(0, 0, [{ x: 75, y: 0 }])).toBe(false); // 50%
+    });
+  });
+
+  describe("toPublicStickyNote", () => {
+    it("strips the sessionId", () => {
+      const note: StickyNote = {
+        id: "n1",
+        imageUrl: "https://example.com/n1.png",
+        color: "yellow",
+        x: 0,
+        y: 0,
+        rotation: 0,
+        createdAt: new Date(0).toISOString(),
+        moderationStatus: "approved",
+        flagCount: 0,
+        sessionId: "secret-session",
+      };
+
+      const publicNote = toPublicStickyNote(note);
+      expect("sessionId" in publicNote).toBe(false);
+      expect(publicNote.id).toBe("n1");
     });
   });
 });

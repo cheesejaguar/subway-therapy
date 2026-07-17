@@ -1,11 +1,11 @@
-import { NextResponse } from "next/server";
+import { noStoreJson } from "@/lib/http";
 import { canUserPostNote, formatTimeRemaining } from "@/lib/session";
 
 export async function GET() {
   try {
     const postCheck = await canUserPostNote();
 
-    return NextResponse.json({
+    return noStoreJson({
       canPost: postCheck.canPost,
       reason: postCheck.reason,
       timeUntilNextPost: postCheck.timeUntilNextPost
@@ -14,6 +14,6 @@ export async function GET() {
     });
   } catch (error) {
     console.error("Error checking session:", error);
-    return NextResponse.json({ canPost: true });
+    return noStoreJson({ canPost: true });
   }
 }

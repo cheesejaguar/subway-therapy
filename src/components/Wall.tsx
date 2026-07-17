@@ -8,12 +8,37 @@ import React, {
   useMemo,
 } from "react";
 import { useGesture } from "@use-gesture/react";
-import { StickyNote, NoteColor, WALL_CONFIG, ViewportBounds, NOTE_COLORS, getMaxOverlapWithNotes, MAX_OVERLAP_PERCENTAGE } from "@/lib/types";
+import {
+  StickyNote,
+  NoteColor,
+  WALL_CONFIG,
+  ViewportBounds,
+  NOTE_COLORS,
+  clampNoteToWall,
+  getMaxOverlapWithNotes,
+  MAX_OVERLAP_PERCENTAGE,
+} from "@/lib/types";
+import {
+  ViewState,
+  MIN_ZOOM,
+  MAX_ZOOM,
+  clampViewToWall,
+  zoomViewAt,
+} from "@/lib/viewport";
 import StickyNoteComponent from "./StickyNote";
 import Minimap from "./Minimap";
 
 // Tile size for chunked rendering (pixels)
 const TILE_SIZE = 2000;
+
+// Quantum for the visible-notes filter: keeps the filtered array's identity
+// stable while panning within a small region, so memoized notes skip
+// reconciliation entirely on most frames.
+const VISIBLE_QUANTUM = 256;
+
+const WHEEL_ZOOM_SENSITIVITY = 0.0015;
+const KEYBOARD_ZOOM_STEP = 1.15;
+const BUTTON_ZOOM_STEP = 1.25;
 
 interface PendingNote {
   imageData: string;
@@ -23,57 +48,91 @@ interface PendingNote {
 interface WallProps {
   notes: StickyNote[];
   onNoteClick?: (note: StickyNote) => void;
-  onFlagNote?: (noteId: string) => void;
   onViewportChange?: (bounds: ViewportBounds) => void;
   isLoading?: boolean;
+  // False while a note fetch for the current viewport is still outstanding —
+  // gates the "empty wall" hint so it can't flash before data arrives.
+  isViewportReady?: boolean;
   isPlacingNote?: boolean;
   pendingNote?: PendingNote | null;
   onPlaceNote?: (x: number, y: number) => void;
   onCancelPlacement?: () => void;
 }
 
-const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 2;
-const ZOOM_SENSITIVITY = 0.001;
+const { wallWidth, wallHeight, noteWidth, noteHeight } = WALL_CONFIG;
+const WALL_CENTER_X = wallWidth / 2;
 
 export default function Wall({
   notes,
   onNoteClick,
-  onFlagNote,
   onViewportChange,
   isLoading = false,
+  isViewportReady = true,
   isPlacingNote = false,
   pendingNote = null,
   onPlaceNote,
   onCancelPlacement,
 }: WallProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
+  const [view, setView] = useState<ViewState>({ x: 0, y: 0, zoom: 1 });
   const [containerSize, setContainerSize] = useState({ width: 1000, height: 1000 });
   const [ghostPosition, setGhostPosition] = useState<{ x: number; y: number } | null>(null);
   const [hasInitialized, setHasInitialized] = useState(false);
   const [currentOverlap, setCurrentOverlap] = useState(0);
 
-  const gestureStateRef = useRef({
-    isPinching: false,
-    lastPinchOrigin: { x: 0, y: 0 },
-  });
+  // Refs mirroring state, so stable callbacks (wheel/pinch handlers) can
+  // read the latest values without re-registering.
+  const viewRef = useRef(view);
+  const sizeRef = useRef(containerSize);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+  useEffect(() => {
+    sizeRef.current = containerSize;
+  }, [containerSize]);
 
-  const { wallWidth, wallHeight } = WALL_CONFIG;
-  const WALL_CENTER_X = 300000;
+  // All view updates funnel through these two helpers so every input path
+  // (drag, wheel, pinch, keyboard, minimap, reset) stays clamped to the wall.
+  const setClampedView = useCallback((updater: (v: ViewState) => ViewState) => {
+    setView((v) =>
+      clampViewToWall(updater(v), sizeRef.current.width, sizeRef.current.height)
+    );
+  }, []);
+
+  const zoomAtPoint = useCallback((anchorX: number, anchorY: number, targetZoom: number) => {
+    setView((v) =>
+      zoomViewAt(
+        v,
+        anchorX,
+        anchorY,
+        targetZoom,
+        sizeRef.current.width,
+        sizeRef.current.height
+      )
+    );
+  }, []);
 
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
+        sizeRef.current = { width: rect.width, height: rect.height };
         setContainerSize({ width: rect.width, height: rect.height });
 
         if (!hasInitialized) {
           const centerX = -WALL_CENTER_X + rect.width / 2;
           const centerY = -wallHeight / 2 + rect.height / 2;
-          setPosition({ x: centerX, y: centerY });
+          setView((v) =>
+            clampViewToWall(
+              { ...v, x: centerX, y: centerY },
+              rect.width,
+              rect.height
+            )
+          );
           setHasInitialized(true);
+        } else {
+          // Keep the wall in frame when the window shrinks or grows.
+          setClampedView((v) => v);
         }
       }
     };
@@ -81,26 +140,29 @@ export default function Wall({
     updateSize();
     window.addEventListener("resize", updateSize);
     return () => window.removeEventListener("resize", updateSize);
-  }, [hasInitialized, wallHeight]);
+  }, [hasInitialized, setClampedView]);
 
   const getViewportBounds = useCallback((): ViewportBounds => {
     return {
-      minX: -position.x / zoom,
-      maxX: (-position.x + containerSize.width) / zoom,
-      minY: -position.y / zoom,
-      maxY: (-position.y + containerSize.height) / zoom,
+      minX: -view.x / view.zoom,
+      maxX: (-view.x + containerSize.width) / view.zoom,
+      minY: -view.y / view.zoom,
+      maxY: (-view.y + containerSize.height) / view.zoom,
     };
-  }, [position, zoom, containerSize]);
+  }, [view, containerSize]);
 
+  // Notify the parent about viewport changes, debounced, and only after the
+  // container has been measured — the pre-measurement default would request
+  // a meaningless region.
   useEffect(() => {
-    if (!onViewportChange) return;
+    if (!onViewportChange || !hasInitialized) return;
 
     const timeoutId = setTimeout(() => {
       onViewportChange(getViewportBounds());
     }, 100);
 
     return () => clearTimeout(timeoutId);
-  }, [position, zoom, containerSize, getViewportBounds, onViewportChange]);
+  }, [view, containerSize, hasInitialized, getViewportBounds, onViewportChange]);
 
   const screenToWall = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } => {
@@ -108,24 +170,54 @@ export default function Wall({
       if (!rect) return { x: 0, y: 0 };
       const screenX = clientX - rect.left;
       const screenY = clientY - rect.top;
-      const wallX = (screenX - position.x) / zoom;
-      const wallY = (screenY - position.y) / zoom;
-      return { x: wallX, y: wallY };
+      const v = viewRef.current;
+      return { x: (screenX - v.x) / v.zoom, y: (screenY - v.y) / v.zoom };
     },
-    [position, zoom]
+    []
   );
+
+  const bounds = getViewportBounds();
+
+  // Filter bounds are quantized outward so the resulting array identity only
+  // changes when the viewport crosses a 256px boundary — during a smooth pan
+  // the memoized StickyNote children skip re-rendering entirely.
+  const notePadding = 300;
+  const qMinX =
+    Math.floor((bounds.minX - notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
+  const qMaxX =
+    Math.ceil((bounds.maxX + notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
+  const qMinY =
+    Math.floor((bounds.minY - notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
+  const qMaxY =
+    Math.ceil((bounds.maxY + notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
+
+  const visibleNotes = useMemo(() => {
+    return notes.filter(
+      (note) =>
+        note.x >= qMinX && note.x <= qMaxX && note.y >= qMinY && note.y <= qMaxY
+    );
+  }, [notes, qMinX, qMaxX, qMinY, qMaxY]);
 
   const isPlacementValid = currentOverlap <= MAX_OVERLAP_PERCENTAGE;
 
   const updateGhostPosition = useCallback(
     (clientX: number, clientY: number) => {
       const wallPos = screenToWall(clientX, clientY);
-      const newGhostPos = { x: wallPos.x - 75, y: wallPos.y - 75 };
+      // Clamp the preview exactly like the server clamps the stored note,
+      // so what the user sees is where the note actually lands.
+      const newGhostPos = clampNoteToWall({
+        x: wallPos.x - noteWidth / 2,
+        y: wallPos.y - noteHeight / 2,
+      });
       setGhostPosition(newGhostPos);
-      const overlap = getMaxOverlapWithNotes(newGhostPos.x, newGhostPos.y, notes);
+      const overlap = getMaxOverlapWithNotes(
+        newGhostPos.x,
+        newGhostPos.y,
+        visibleNotes
+      );
       setCurrentOverlap(overlap);
     },
-    [screenToWall, notes]
+    [screenToWall, visibleNotes]
   );
 
   const handleClick = useCallback(
@@ -145,14 +237,17 @@ export default function Wall({
     (clientX: number, clientY: number) => {
       if (isPlacingNote && onPlaceNote) {
         const wallPos = screenToWall(clientX, clientY);
-        const notePos = { x: wallPos.x - 75, y: wallPos.y - 75 };
-        const overlap = getMaxOverlapWithNotes(notePos.x, notePos.y, notes);
+        const notePos = clampNoteToWall({
+          x: wallPos.x - noteWidth / 2,
+          y: wallPos.y - noteHeight / 2,
+        });
+        const overlap = getMaxOverlapWithNotes(notePos.x, notePos.y, visibleNotes);
         if (overlap <= MAX_OVERLAP_PERCENTAGE) {
           onPlaceNote(notePos.x, notePos.y);
         }
       }
     },
-    [isPlacingNote, onPlaceNote, screenToWall, notes]
+    [isPlacingNote, onPlaceNote, screenToWall, visibleNotes]
   );
 
   useGesture(
@@ -195,50 +290,45 @@ export default function Wall({
         }
 
         if (first) {
-          return position;
+          return { x: viewRef.current.x, y: viewRef.current.y };
         }
 
-        const initialPos = memo || position;
-        setPosition({
-          x: initialPos.x + mx,
-          y: initialPos.y + my,
-        });
+        const initial = memo ?? { x: viewRef.current.x, y: viewRef.current.y };
+        setClampedView((v) => ({ ...v, x: initial.x + mx, y: initial.y + my }));
 
         return memo;
       },
 
-      onPinch: ({ origin: [ox, oy], first, last, offset: [scale], memo }) => {
+      // Pinch: `offset` is reseeded from the live zoom via `from`, so pinch
+      // stays in sync after wheel/keyboard zooming. The origin delta between
+      // frames doubles as two-finger pan.
+      onPinch: ({ origin: [ox, oy], first, offset: [scale], memo }) => {
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return memo;
 
         const centerX = ox - rect.left;
         const centerY = oy - rect.top;
 
-        if (first) {
-          gestureStateRef.current.isPinching = true;
-          return {
-            initialZoom: zoom,
-            initialPosition: position,
-            initialCenter: { x: centerX, y: centerY },
-          };
+        if (first || !memo) {
+          return { lastCx: centerX, lastCy: centerY };
         }
 
-        if (last) {
-          gestureStateRef.current.isPinching = false;
-          return memo;
-        }
+        const dx = centerX - memo.lastCx;
+        const dy = centerY - memo.lastCy;
 
-        if (!memo) return memo;
+        setView((v) => {
+          const panned = { ...v, x: v.x + dx, y: v.y + dy };
+          return zoomViewAt(
+            panned,
+            centerX,
+            centerY,
+            scale,
+            sizeRef.current.width,
+            sizeRef.current.height
+          );
+        });
 
-        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale));
-        const zoomRatio = newZoom / memo.initialZoom;
-        const newX = centerX - (memo.initialCenter.x - memo.initialPosition.x) * zoomRatio;
-        const newY = centerY - (memo.initialCenter.y - memo.initialPosition.y) * zoomRatio;
-
-        setZoom(newZoom);
-        setPosition({ x: newX, y: newY });
-
-        return memo;
+        return { lastCx: centerX, lastCy: centerY };
       },
 
       onMove: ({ event }) => {
@@ -260,6 +350,7 @@ export default function Wall({
         rubberband: true,
         pointer: { touch: true },
         preventDefault: true,
+        from: () => [viewRef.current.zoom, 0],
       },
     }
   );
@@ -274,64 +365,75 @@ export default function Wall({
       const rect = container.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
-      const delta = -e.deltaY * ZOOM_SENSITIVITY;
 
-      setZoom((currentZoom) => {
-        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, currentZoom + delta));
-        if (newZoom === currentZoom) return currentZoom;
-
-        const zoomRatio = newZoom / currentZoom;
-        setPosition((currentPos) => ({
-          x: mouseX - (mouseX - currentPos.x) * zoomRatio,
-          y: mouseY - (mouseY - currentPos.y) * zoomRatio,
-        }));
-
-        return newZoom;
-      });
+      // Multiplicative zoom feels uniform at every zoom level.
+      const target =
+        viewRef.current.zoom * Math.exp(-e.deltaY * WHEEL_ZOOM_SENSITIVITY);
+      zoomAtPoint(mouseX, mouseY, target);
     };
 
     container.addEventListener("wheel", handleWheel, { passive: false });
     return () => container.removeEventListener("wheel", handleWheel);
-  }, []);
+  }, [zoomAtPoint]);
 
   const handleResetView = useCallback(() => {
-    setZoom(1);
-    const centerX = -WALL_CENTER_X + containerSize.width / 2;
-    const centerY = -wallHeight / 2 + containerSize.height / 2;
-    setPosition({ x: centerX, y: centerY });
-  }, [containerSize, wallHeight]);
+    setClampedView(() => ({
+      x: -WALL_CENTER_X + sizeRef.current.width / 2,
+      y: -wallHeight / 2 + sizeRef.current.height / 2,
+      zoom: 1,
+    }));
+  }, [setClampedView]);
+
+  // Zoom by a factor, anchored to the viewport center (buttons + keyboard).
+  const zoomAtCenterBy = useCallback(
+    (factor: number) => {
+      zoomAtPoint(
+        sizeRef.current.width / 2,
+        sizeRef.current.height / 2,
+        viewRef.current.zoom * factor
+      );
+    },
+    [zoomAtPoint]
+  );
+
+  const handleZoomIn = useCallback(() => {
+    zoomAtCenterBy(BUTTON_ZOOM_STEP);
+  }, [zoomAtCenterBy]);
+
+  const handleZoomOut = useCallback(() => {
+    zoomAtCenterBy(1 / BUTTON_ZOOM_STEP);
+  }, [zoomAtCenterBy]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const moveAmount = 50;
-      const zoomAmount = 0.1;
 
       switch (e.key) {
         case "ArrowUp":
           e.preventDefault();
-          setPosition((p) => ({ ...p, y: p.y + moveAmount }));
+          setClampedView((v) => ({ ...v, y: v.y + moveAmount }));
           break;
         case "ArrowDown":
           e.preventDefault();
-          setPosition((p) => ({ ...p, y: p.y - moveAmount }));
+          setClampedView((v) => ({ ...v, y: v.y - moveAmount }));
           break;
         case "ArrowLeft":
           e.preventDefault();
-          setPosition((p) => ({ ...p, x: p.x + moveAmount }));
+          setClampedView((v) => ({ ...v, x: v.x + moveAmount }));
           break;
         case "ArrowRight":
           e.preventDefault();
-          setPosition((p) => ({ ...p, x: p.x - moveAmount }));
+          setClampedView((v) => ({ ...v, x: v.x - moveAmount }));
           break;
         case "+":
         case "=":
           e.preventDefault();
-          setZoom((z) => Math.min(MAX_ZOOM, z + zoomAmount));
+          zoomAtCenterBy(KEYBOARD_ZOOM_STEP);
           break;
         case "-":
         case "_":
           e.preventDefault();
-          setZoom((z) => Math.max(MIN_ZOOM, z - zoomAmount));
+          zoomAtCenterBy(1 / KEYBOARD_ZOOM_STEP);
           break;
         case "0":
           e.preventDefault();
@@ -339,10 +441,8 @@ export default function Wall({
           break;
       }
     },
-    [handleResetView]
+    [setClampedView, zoomAtCenterBy, handleResetView]
   );
-
-  const bounds = getViewportBounds();
 
   const visibleTiles = useMemo(() => {
     const tiles: { x: number; y: number; key: string }[] = [];
@@ -370,31 +470,30 @@ export default function Wall({
     }
 
     return tiles;
-  }, [bounds.minX, bounds.maxX, bounds.minY, bounds.maxY, wallWidth, wallHeight]);
-
-  const notePadding = 300;
-  const visibleNotes = useMemo(() => {
-    return notes.filter(
-      (note) =>
-        note.x >= bounds.minX - notePadding &&
-        note.x <= bounds.maxX + notePadding &&
-        note.y >= bounds.minY - notePadding &&
-        note.y <= bounds.maxY + notePadding
-    );
-  }, [notes, bounds.minX, bounds.maxX, bounds.minY, bounds.maxY]);
+  }, [bounds.minX, bounds.maxX, bounds.minY, bounds.maxY]);
 
   const handleMinimapNavigate = useCallback(
     (wallX: number, wallY: number) => {
-      const newX = -wallX * zoom + containerSize.width / 2;
-      const newY = -wallY * zoom + containerSize.height / 2;
-      setPosition({ x: newX, y: newY });
+      setClampedView((v) => ({
+        ...v,
+        x: -wallX * v.zoom + sizeRef.current.width / 2,
+        y: -wallY * v.zoom + sizeRef.current.height / 2,
+      }));
     },
-    [containerSize, zoom]
+    [setClampedView]
   );
+
+  const showEmptyHint =
+    hasInitialized &&
+    !isLoading &&
+    isViewportReady &&
+    !isPlacingNote &&
+    visibleNotes.length === 0;
 
   return (
     <div
       ref={containerRef}
+      id="main-content"
       className={`wall-container w-full h-full overflow-hidden focus:outline-none bg-[var(--station-dark)] touch-none ${
         isPlacingNote
           ? isPlacementValid
@@ -406,12 +505,12 @@ export default function Wall({
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="application"
-      aria-label="Virtual sticky note wall. Use arrow keys to navigate, pinch to zoom, tap Reset to return to center."
+      aria-label="Virtual sticky note wall. Use arrow keys to navigate, plus and minus to zoom, 0 to reset."
     >
       <div
         className="relative"
         style={{
-          transform: `translate3d(${position.x}px, ${position.y}px, 0) scale(${zoom})`,
+          transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.zoom})`,
           transformOrigin: "0 0",
           width: wallWidth,
           height: wallHeight,
@@ -449,12 +548,7 @@ export default function Wall({
         )}
 
         {visibleNotes.map((note) => (
-          <StickyNoteComponent
-            key={note.id}
-            note={note}
-            onClick={() => onNoteClick?.(note)}
-            onFlag={() => onFlagNote?.(note.id)}
-          />
+          <StickyNoteComponent key={note.id} note={note} onNoteClick={onNoteClick} />
         ))}
 
         {/* Ghost note during placement */}
@@ -487,15 +581,66 @@ export default function Wall({
         )}
       </div>
 
+      {/* Empty-viewport hint */}
+      {showEmptyHint && (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 station-chrome rounded-lg px-6 py-4 z-10 text-center pointer-events-auto">
+          <p
+            className="text-white/70 text-sm mb-3"
+            style={{ fontFamily: "var(--font-display)", fontWeight: 500 }}
+          >
+            This stretch of wall is empty
+          </p>
+          <button
+            onClick={handleResetView}
+            className="px-4 py-2 rounded-lg bg-[var(--mta-green)] text-white mta-button text-xs tracking-wider"
+          >
+            Back to center
+          </button>
+        </div>
+      )}
+
       {/* Bottom-right controls — MTA-styled */}
       <div
         className="absolute right-4 flex flex-col gap-2 z-20"
         style={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))" }}
       >
         <button
+          onClick={handleZoomIn}
+          className="station-chrome w-10 h-10 rounded-lg flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors touch-target"
+          aria-label="Zoom in"
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            handleZoomIn();
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+            <line x1="8" y1="3" x2="8" y2="13" />
+            <line x1="3" y1="8" x2="13" y2="8" />
+          </svg>
+        </button>
+        <button
+          onClick={handleZoomOut}
+          className="station-chrome w-10 h-10 rounded-lg flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors touch-target"
+          aria-label="Zoom out"
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            handleZoomOut();
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+            <line x1="3" y1="8" x2="13" y2="8" />
+          </svg>
+        </button>
+        <button
           onClick={handleResetView}
           className="station-chrome w-10 h-10 rounded-lg flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors touch-target"
-          aria-label="Reset view"
+          aria-label="Reset view to center"
           onTouchStart={(e) => e.stopPropagation()}
           onTouchMove={(e) => e.stopPropagation()}
           onTouchEnd={(e) => {
@@ -504,10 +649,14 @@ export default function Wall({
             handleResetView();
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <circle cx="8" cy="8" r="6" />
-            <line x1="8" y1="5" x2="8" y2="8" />
-            <line x1="8" y1="8" x2="10.5" y2="10" />
+          {/* Crosshair-style recenter icon */}
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+            <circle cx="8" cy="8" r="4.5" />
+            <circle cx="8" cy="8" r="0.75" fill="currentColor" />
+            <line x1="8" y1="0.5" x2="8" y2="3" />
+            <line x1="8" y1="13" x2="8" y2="15.5" />
+            <line x1="0.5" y1="8" x2="3" y2="8" />
+            <line x1="13" y1="8" x2="15.5" y2="8" />
           </svg>
         </button>
       </div>
@@ -523,7 +672,7 @@ export default function Wall({
           letterSpacing: "0.05em",
         }}
       >
-        <span className="text-white/60">{Math.round(zoom * 100)}%</span>
+        <span className="text-white/60">{Math.round(view.zoom * 100)}%</span>
       </div>
 
       {/* Placement mode UI — MTA service advisory style */}
@@ -548,7 +697,7 @@ export default function Wall({
           >
             {isPlacementValid
               ? "Tap on the wall to place your note"
-              : "Too much overlap \u2014 move to a clearer spot"}
+              : "Too much overlap — move to a clearer spot"}
           </span>
           <button
             onClick={onCancelPlacement}

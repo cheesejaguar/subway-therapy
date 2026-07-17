@@ -2,9 +2,12 @@
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { NoteColor, InkColor, NOTE_COLORS, INK_COLORS } from "@/lib/types";
+import { getBase64ByteLength, MAX_IMAGE_BYTES } from "@/lib/validation";
+import { useModalDialog } from "./useModalDialog";
 
+// The creator is mounted fresh each time it opens (see page.tsx), so all
+// drawing state naturally resets when it closes.
 interface NoteCreatorProps {
-  isOpen: boolean;
   onClose: () => void;
   onPreparePlace: (imageData: string, color: NoteColor) => void;
   canPost: boolean;
@@ -27,8 +30,18 @@ const NOTE_COLOR_OPTIONS: NoteColor[] = [
 
 const INK_COLOR_OPTIONS: InkColor[] = ["black", "blue", "red", "green", "purple"];
 
+// Logical canvas size; the backing store is scaled by devicePixelRatio
+// (capped at 2) for crisp strokes and exports.
+const CANVAS_SIZE = 300;
+// Client-side export guard, derived from the server's validation limit with
+// headroom so a borderline image is never rejected server-side.
+const MAX_EXPORT_BYTES = MAX_IMAGE_BYTES - 20_000;
+
+function dataUrlByteLength(dataUrl: string): number {
+  return getBase64ByteLength(dataUrl.slice(dataUrl.indexOf(",") + 1));
+}
+
 export default function NoteCreator({
-  isOpen,
   onClose,
   onPreparePlace,
   canPost,
@@ -36,36 +49,68 @@ export default function NoteCreator({
   timeUntilNextPost,
 }: NoteCreatorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Transparent offscreen layer holding only the user's strokes. The visible
+  // canvas is always background fill + this layer composited, so changing
+  // the note color never destroys the drawing.
+  const strokeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Frozen on first use: re-reading devicePixelRatio on later effect runs
+  // would resize (and thereby wipe) the stroke layer mid-drawing.
+  const scaleRef = useRef<number | null>(null);
+
   const [noteColor, setNoteColor] = useState<NoteColor>("yellow");
   const [inkColor, setInkColor] = useState<InkColor>("black");
   const [inputMode, setInputMode] = useState<InputMode>("draw");
   const [text, setText] = useState("");
-  const [isDrawing, setIsDrawing] = useState(false);
+  // Ref, not state: pointer-move events can arrive before a state update
+  // re-renders, which would silently drop the start of fast strokes.
+  const isDrawingRef = useRef(false);
   const [hasDrawn, setHasDrawn] = useState(false);
   const [brushSize, setBrushSize] = useState(3);
 
-  const prevNoteColorRef = useRef<NoteColor>(noteColor);
+  const dialogRef = useModalDialog({ isOpen: true, onClose });
 
+  const repaintDisplay = useCallback(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+
+    ctx.fillStyle = NOTE_COLORS[noteColor];
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (strokeCanvasRef.current) {
+      ctx.drawImage(strokeCanvasRef.current, 0, 0);
+    }
+  }, [noteColor]);
+
+  // Size the canvases when the drawing surface (re)mounts. Strokes are only
+  // cleared when the modal transitions closed -> open, so switching between
+  // Draw/Type or picking a different note color preserves the drawing.
   useEffect(() => {
-    if (!isOpen || inputMode !== "draw") return;
+    if (inputMode !== "draw") return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    canvas.width = 300;
-    canvas.height = 300;
-
-    ctx.fillStyle = NOTE_COLORS[noteColor];
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    if (prevNoteColorRef.current !== noteColor) {
-      prevNoteColorRef.current = noteColor;
-      queueMicrotask(() => setHasDrawn(false));
+    if (scaleRef.current === null) {
+      scaleRef.current = Math.min(window.devicePixelRatio || 1, 2);
     }
-  }, [isOpen, noteColor, inputMode]);
+    const size = CANVAS_SIZE * scaleRef.current;
+
+    if (canvas.width !== size || canvas.height !== size) {
+      canvas.width = size;
+      canvas.height = size;
+    }
+
+    if (!strokeCanvasRef.current) {
+      strokeCanvasRef.current = document.createElement("canvas");
+    }
+    const strokeCanvas = strokeCanvasRef.current;
+    if (strokeCanvas.width !== size || strokeCanvas.height !== size) {
+      strokeCanvas.width = size;
+      strokeCanvas.height = size;
+    }
+
+    repaintDisplay();
+  }, [inputMode, repaintDisplay]);
 
   const getPointerPosition = useCallback(
     (
@@ -96,89 +141,112 @@ export default function NoteCreator({
 
   const startDrawing = useCallback(
     (e: React.MouseEvent | React.TouchEvent) => {
-      const canvas = canvasRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (!canvas || !ctx) return;
+      const strokeCtx = strokeCanvasRef.current?.getContext("2d");
+      if (!strokeCtx) return;
 
       const pos = getPointerPosition(e);
       if (!pos) return;
 
-      setIsDrawing(true);
-      ctx.beginPath();
-      ctx.moveTo(pos.x, pos.y);
-      ctx.strokeStyle = INK_COLORS[inkColor];
-      ctx.lineWidth = brushSize;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
+      const lineWidth = brushSize * (scaleRef.current ?? 1);
+      strokeCtx.strokeStyle = INK_COLORS[inkColor];
+      strokeCtx.fillStyle = INK_COLORS[inkColor];
+      strokeCtx.lineWidth = lineWidth;
+      strokeCtx.lineCap = "round";
+      strokeCtx.lineJoin = "round";
+
+      // A tap with no movement should still leave a dot.
+      strokeCtx.beginPath();
+      strokeCtx.arc(pos.x, pos.y, lineWidth / 2, 0, Math.PI * 2);
+      strokeCtx.fill();
+
+      strokeCtx.beginPath();
+      strokeCtx.moveTo(pos.x, pos.y);
+
+      isDrawingRef.current = true;
+      setHasDrawn(true);
+      repaintDisplay();
     },
-    [getPointerPosition, inkColor, brushSize]
+    [getPointerPosition, inkColor, brushSize, repaintDisplay]
   );
 
   const draw = useCallback(
     (e: React.MouseEvent | React.TouchEvent) => {
-      if (!isDrawing) return;
+      if (!isDrawingRef.current) return;
 
-      const canvas = canvasRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (!canvas || !ctx) return;
+      const strokeCtx = strokeCanvasRef.current?.getContext("2d");
+      if (!strokeCtx) return;
 
       const pos = getPointerPosition(e);
       if (!pos) return;
 
-      ctx.lineTo(pos.x, pos.y);
-      ctx.stroke();
-      setHasDrawn(true);
+      strokeCtx.lineTo(pos.x, pos.y);
+      strokeCtx.stroke();
+      repaintDisplay();
     },
-    [isDrawing, getPointerPosition]
+    [getPointerPosition, repaintDisplay]
   );
 
   const stopDrawing = useCallback(() => {
-    setIsDrawing(false);
+    isDrawingRef.current = false;
   }, []);
 
   const clearCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-
-    ctx.fillStyle = NOTE_COLORS[noteColor];
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const strokeCanvas = strokeCanvasRef.current;
+    strokeCanvas
+      ?.getContext("2d")
+      ?.clearRect(0, 0, strokeCanvas.width, strokeCanvas.height);
+    repaintDisplay();
     setHasDrawn(false);
-  }, [noteColor]);
+  }, [repaintDisplay]);
 
-  const generateImageFromText = useCallback((): string => {
+  const generateImageFromText = useCallback(async (): Promise<string> => {
+    // Render at 2x for crisp text regardless of screen DPR.
+    const exportScale = 2;
     const canvas = document.createElement("canvas");
-    canvas.width = 300;
-    canvas.height = 300;
+    canvas.width = CANVAS_SIZE * exportScale;
+    canvas.height = CANVAS_SIZE * exportScale;
     const ctx = canvas.getContext("2d");
     if (!ctx) return "";
+
+    // next/font hashes family names, so resolve the real body font from the
+    // computed style, and make sure it is loaded before drawing to canvas.
+    const bodyFamily =
+      getComputedStyle(document.body).fontFamily || "sans-serif";
+    const font = `${20 * exportScale}px ${bodyFamily}`;
+    try {
+      await document.fonts.load(font);
+      await document.fonts.ready;
+    } catch {
+      // Fall through and draw with whatever is available.
+    }
 
     ctx.fillStyle = NOTE_COLORS[noteColor];
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.fillStyle = INK_COLORS[inkColor];
-    ctx.font = "20px 'Barlow', 'Helvetica Neue', sans-serif";
+    ctx.font = font;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    const maxWidth = 260;
-    const lineHeight = 26;
-    const words = text.split(" ");
+    const maxWidth = 260 * exportScale;
+    const lineHeight = 26 * exportScale;
+    // Honor explicit line breaks, then wrap each paragraph by width.
     const lines: string[] = [];
-    let currentLine = "";
+    for (const paragraph of text.split("\n")) {
+      const words = paragraph.split(" ");
+      let currentLine = "";
 
-    words.forEach((word) => {
-      const testLine = currentLine ? `${currentLine} ${word}` : word;
-      const metrics = ctx.measureText(testLine);
+      words.forEach((word) => {
+        const testLine = currentLine ? `${currentLine} ${word}` : word;
+        const metrics = ctx.measureText(testLine);
 
-      if (metrics.width > maxWidth && currentLine) {
-        lines.push(currentLine);
-        currentLine = word;
-      } else {
-        currentLine = testLine;
-      }
-    });
-    if (currentLine) {
+        if (metrics.width > maxWidth && currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine = testLine;
+        }
+      });
       lines.push(currentLine);
     }
 
@@ -192,7 +260,7 @@ export default function NoteCreator({
     return canvas.toDataURL("image/png");
   }, [noteColor, inkColor, text]);
 
-  const handlePreparePlace = () => {
+  const handlePreparePlace = async () => {
     if (!canPost) return;
 
     let imageData: string;
@@ -201,17 +269,29 @@ export default function NoteCreator({
       const canvas = canvasRef.current;
       if (!canvas) return;
       imageData = canvas.toDataURL("image/png");
+
+      // Extremely dense drawings at 2x could approach the server's size
+      // limit; fall back to a 1x export if needed.
+      if (dataUrlByteLength(imageData) > MAX_EXPORT_BYTES) {
+        const fallback = document.createElement("canvas");
+        fallback.width = CANVAS_SIZE;
+        fallback.height = CANVAS_SIZE;
+        const fallbackCtx = fallback.getContext("2d");
+        if (fallbackCtx) {
+          fallbackCtx.drawImage(canvas, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
+          imageData = fallback.toDataURL("image/png");
+        }
+      }
     } else {
-      imageData = generateImageFromText();
+      imageData = await generateImageFromText();
     }
 
+    if (!imageData) return;
     onPreparePlace(imageData, noteColor);
   };
 
   const isValid =
     inputMode === "draw" ? hasDrawn : text.trim().length > 0;
-
-  if (!isOpen) return null;
 
   return (
     <div
@@ -221,6 +301,7 @@ export default function NoteCreator({
       aria-labelledby="note-creator-title"
     >
       <div
+        ref={dialogRef}
         className="modal-card rounded-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
         style={{ animation: "slideUp 0.3s ease" }}
       >
@@ -246,7 +327,7 @@ export default function NoteCreator({
         <div className="p-6 space-y-5">
           {!canPost ? (
             <div className="text-center py-8">
-              <div className="mta-bullet-lg mx-auto mb-4" style={{ backgroundColor: "var(--mta-yellow)", width: 48, height: 48, fontSize: 24 }}>
+              <div className="mta-bullet-lg mx-auto mb-4" style={{ backgroundColor: "var(--mta-yellow)", color: "#1a1a1a", width: 48, height: 48, fontSize: 24 }}>
                 !
               </div>
               <h3
@@ -386,6 +467,7 @@ export default function NoteCreator({
                       onTouchStart={startDrawing}
                       onTouchMove={draw}
                       onTouchEnd={stopDrawing}
+                      onTouchCancel={stopDrawing}
                       aria-label="Drawing canvas"
                     />
                   </div>

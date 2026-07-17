@@ -6,16 +6,6 @@ import { deleteNoteImage } from "./blob";
 const notesStore: Map<string, StickyNote> = new Map();
 const noteFlaggers: Map<string, Set<string>> = new Map();
 
-// Blocklist for automated moderation
-const BLOCKLIST_WORDS: string[] = [
-  // Add blocked words here for production
-];
-
-export function checkForBlockedContent(text: string): boolean {
-  const lowerText = text.toLowerCase();
-  return BLOCKLIST_WORDS.some((word) => lowerText.includes(word.toLowerCase()));
-}
-
 export function findAvailablePosition(): { x: number; y: number } {
   const { wallHeight, noteHeight } = WALL_CONFIG;
 

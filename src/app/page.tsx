@@ -1,32 +1,91 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import Wall from "@/components/Wall";
 import NoteCreator from "@/components/NoteCreator";
 import OnboardingPopup from "@/components/OnboardingPopup";
-import { StickyNote, NoteColor, ViewportBounds } from "@/lib/types";
+import NoteDetailModal from "@/components/NoteDetailModal";
+import { NoteColor, PublicStickyNote, ViewportBounds } from "@/lib/types";
+import {
+  mergeNotesIntoCache,
+  pruneCacheAround,
+  tileRangeForBounds,
+  tileToBounds,
+} from "@/lib/noteCache";
 
 const ONBOARDING_STORAGE_KEY = "subway_therapy_onboarded";
+
+// How long a fetched tile is considered fresh on the client. Matches the
+// spirit of the CDN's s-maxage=30: panning around does not re-request tiles
+// the user just saw.
+const TILE_TTL_MS = 60_000;
 
 interface PendingNote {
   imageData: string;
   color: NoteColor;
 }
 
+interface Toast {
+  kind: "success" | "error";
+  text: string;
+}
+
+
+// Shared MTA-style status banner shell used by the toast and the fetch-error
+// banner (same chrome, position, and animation).
+function StatusBanner({
+  role,
+  children,
+}: {
+  role: "status" | "alert";
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="fixed top-4 left-1/2 station-chrome rounded-lg px-5 py-3 z-40 flex items-center gap-3"
+      style={{ animation: "slideDown 0.3s ease", transform: "translate(-50%, 0)" }}
+      role={role}
+      aria-live={role === "status" ? "polite" : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
 export default function Home() {
-  const [notes, setNotes] = useState<StickyNote[]>([]);
+  const [notes, setNotes] = useState<PublicStickyNote[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // True once every tile covering the current viewport has been fetched at
+  // least once — gates the Wall's "empty" hint so it can't flash mid-fetch.
+  const [viewportReady, setViewportReady] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
   const [showCreator, setShowCreator] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [canPost, setCanPost] = useState(true);
   const [cantPostReason, setCantPostReason] = useState<string>();
   const [timeUntilNextPost, setTimeUntilNextPost] = useState<string>();
-  const [submissionMessage, setSubmissionMessage] = useState<string | null>(
-    null
-  );
+  const [toast, setToast] = useState<Toast | null>(null);
+  const [selectedNote, setSelectedNote] = useState<PublicStickyNote | null>(null);
   const [pendingNote, setPendingNote] = useState<PendingNote | null>(null);
   const [isPlacingNote, setIsPlacingNote] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Client-side note cache, merged across tile fetches so notes never vanish
+  // (or replay their appear animation) while panning.
+  const notesCacheRef = useRef(new Map<string, PublicStickyNote>());
+  const tileFetchedAtRef = useRef(new Map<number, number>());
+  const inflightRef = useRef(new Map<number, AbortController>());
+  const lastBoundsRef = useRef<ViewportBounds | null>(null);
+  // Synchronous double-submit guard (state updates are async, so a fast
+  // double click/tap could otherwise POST twice).
+  const submittingRef = useRef(false);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((kind: Toast["kind"], text: string) => {
+    setToast({ kind, text });
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 5000);
+  }, []);
 
   // Check onboarding status
   useEffect(() => {
@@ -36,147 +95,234 @@ export default function Home() {
     }
   }, []);
 
-  // Fetch initial notes
-  useEffect(() => {
-    fetchNotes();
-  }, []);
-
   // Check session status
   useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const response = await fetch("/api/session");
+        if (!response.ok) return;
+
+        const data = await response.json();
+        setCanPost(data.canPost);
+        setCantPostReason(data.reason);
+        setTimeUntilNextPost(data.timeUntilNextPost);
+      } catch (error) {
+        console.error("Error checking session:", error);
+      }
+    };
     checkSession();
   }, []);
 
-  const fetchNotes = async (bounds?: ViewportBounds) => {
-    try {
-      let url = "/api/notes";
-      if (bounds) {
-        const params = new URLSearchParams({
-          minX: bounds.minX.toString(),
-          maxX: bounds.maxX.toString(),
-          minY: bounds.minY.toString(),
-          maxY: bounds.maxY.toString(),
-        });
-        url += `?${params}`;
-      }
-
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("Failed to fetch notes");
-
-      const data = await response.json();
-      setNotes(data.notes);
-    } catch (error) {
-      console.error("Error fetching notes:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const checkSession = async () => {
-    try {
-      const response = await fetch("/api/session");
-      if (!response.ok) return;
-
-      const data = await response.json();
-      setCanPost(data.canPost);
-      setCantPostReason(data.reason);
-      setTimeUntilNextPost(data.timeUntilNextPost);
-    } catch (error) {
-      console.error("Error checking session:", error);
-    }
-  };
-
-  const handleViewportChange = useCallback((bounds: ViewportBounds) => {
-    fetchNotes(bounds);
+  // Abort in-flight fetches and clear timers on unmount.
+  useEffect(() => {
+    const inflight = inflightRef.current;
+    const toastTimeout = toastTimeoutRef;
+    return () => {
+      for (const controller of inflight.values()) controller.abort();
+      inflight.clear();
+      if (toastTimeout.current) clearTimeout(toastTimeout.current);
+    };
   }, []);
 
-  const handleNoteClick = (note: StickyNote) => {
-    console.log("Note clicked:", note.id);
-  };
+  const publishCache = useCallback((centerX: number) => {
+    pruneCacheAround(notesCacheRef.current, centerX);
+    setNotes(Array.from(notesCacheRef.current.values()));
+  }, []);
 
-  const handleFlagNote = async (noteId: string) => {
-    try {
-      const response = await fetch("/api/notes/flag", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ noteId }),
+  const recomputeViewportReady = useCallback(() => {
+    const bounds = lastBoundsRef.current;
+    if (!bounds) return;
+    setViewportReady(
+      tileRangeForBounds(bounds).every((tile) =>
+        tileFetchedAtRef.current.has(tile)
+      )
+    );
+  }, []);
+
+  const fetchTile = useCallback(
+    async (tile: number, viewportCenterX: number) => {
+      if (inflightRef.current.has(tile)) return;
+
+      const fetchedAt = tileFetchedAtRef.current.get(tile);
+      if (fetchedAt !== undefined && Date.now() - fetchedAt < TILE_TTL_MS) return;
+
+      const tileBounds = tileToBounds(tile);
+      // Integer, tile-aligned params: the same URLs repeat across pans and
+      // users, so the CDN can actually cache them.
+      const params = new URLSearchParams({
+        minX: String(tileBounds.minX),
+        maxX: String(tileBounds.maxX),
+        minY: String(tileBounds.minY),
+        maxY: String(tileBounds.maxY),
       });
 
-      if (!response.ok) throw new Error("Failed to flag note");
+      const controller = new AbortController();
+      inflightRef.current.set(tile, controller);
 
-      const data = await response.json();
-      alert(data.message);
-    } catch (error) {
-      console.error("Error flagging note:", error);
-      alert("Failed to report note. Please try again.");
+      try {
+        const response = await fetch(`/api/notes?${params}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("Failed to fetch notes");
+
+        const data = await response.json();
+        if (!Array.isArray(data?.notes)) throw new Error("Malformed response");
+
+        mergeNotesIntoCache(notesCacheRef.current, data.notes, tileBounds);
+        tileFetchedAtRef.current.set(tile, Date.now());
+        setFetchError(false);
+        setIsLoading(false);
+        publishCache(viewportCenterX);
+        recomputeViewportReady();
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        console.error("Error fetching notes:", error);
+        setIsLoading(false);
+        setFetchError(true);
+      } finally {
+        inflightRef.current.delete(tile);
+      }
+    },
+    [publishCache, recomputeViewportReady]
+  );
+
+  const handleViewportChange = useCallback(
+    (bounds: ViewportBounds) => {
+      lastBoundsRef.current = bounds;
+      const centerX = (bounds.minX + bounds.maxX) / 2;
+      for (const tile of tileRangeForBounds(bounds)) {
+        void fetchTile(tile, centerX);
+      }
+      recomputeViewportReady();
+    },
+    [fetchTile, recomputeViewportReady]
+  );
+
+  const handleRetryFetch = useCallback(() => {
+    setFetchError(false);
+    const bounds = lastBoundsRef.current;
+    if (!bounds) return;
+    for (const tile of tileRangeForBounds(bounds)) {
+      tileFetchedAtRef.current.delete(tile);
     }
-  };
+    handleViewportChange(bounds);
+  }, [handleViewportChange]);
 
-  const handlePreparePlace = (imageData: string, color: NoteColor) => {
+  const handleNoteClick = useCallback((note: PublicStickyNote) => {
+    setSelectedNote(note);
+  }, []);
+
+  const handleFlagNote = useCallback(
+    async (noteId: string) => {
+      setSelectedNote(null);
+      try {
+        const response = await fetch("/api/notes/flag", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ noteId }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to report note");
+        }
+
+        showToast("success", data.message);
+      } catch (error) {
+        console.error("Error flagging note:", error);
+        showToast(
+          "error",
+          error instanceof Error ? error.message : "Failed to report note. Please try again."
+        );
+      }
+    },
+    [showToast]
+  );
+
+  const handlePreparePlace = useCallback((imageData: string, color: NoteColor) => {
     setPendingNote({ imageData, color });
     setShowCreator(false);
     setIsPlacingNote(true);
-  };
+  }, []);
 
-  const handleCancelPlacement = () => {
+  const handleCancelPlacement = useCallback(() => {
     setPendingNote(null);
     setIsPlacingNote(false);
-  };
+  }, []);
 
-  const handlePlaceNote = async (x: number, y: number) => {
-    if (!pendingNote || isSubmitting) return;
+  const handlePlaceNote = useCallback(
+    async (x: number, y: number) => {
+      if (!pendingNote || submittingRef.current) return;
+      submittingRef.current = true;
+      setIsSubmitting(true);
 
-    setIsSubmitting(true);
-    try {
-      const response = await fetch("/api/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageData: pendingNote.imageData,
-          color: pendingNote.color,
-          x,
-          y,
-        }),
-      });
+      try {
+        const response = await fetch("/api/notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageData: pendingNote.imageData,
+            color: pendingNote.color,
+            x,
+            y,
+          }),
+        });
 
-      const data = await response.json();
+        const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to submit note");
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to submit note");
+        }
+
+        setPendingNote(null);
+        setIsPlacingNote(false);
+        setCanPost(false);
+        setCantPostReason("Only one note per person per day!");
+
+        // Public GETs are CDN-cached for a short window, so insert the
+        // poster's own note directly — it appears instantly for them.
+        if (data.note?.moderationStatus === "approved" && data.note.imageUrl) {
+          notesCacheRef.current.set(data.note.id, data.note as PublicStickyNote);
+          setNotes(Array.from(notesCacheRef.current.values()));
+        }
+
+        showToast("success", data.message);
+      } catch (error) {
+        console.error("Error submitting note:", error);
+        showToast(
+          "error",
+          error instanceof Error ? error.message : "Failed to submit note"
+        );
+      } finally {
+        submittingRef.current = false;
+        setIsSubmitting(false);
       }
+    },
+    [pendingNote, showToast]
+  );
 
-      setSubmissionMessage(data.message);
-      setPendingNote(null);
-      setIsPlacingNote(false);
-      setCanPost(false);
-      setCantPostReason("Only one note per person per day!");
-
-      await fetchNotes();
-
-      setTimeout(() => setSubmissionMessage(null), 5000);
-    } catch (error) {
-      console.error("Error submitting note:", error);
-      alert(
-        error instanceof Error ? error.message : "Failed to submit note"
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleCloseOnboarding = () => {
+  const handleCloseOnboarding = useCallback(() => {
     localStorage.setItem(ONBOARDING_STORAGE_KEY, "true");
     setShowOnboarding(false);
-  };
+  }, []);
 
   return (
     <div className="wall-page relative w-screen">
+      {/* Accessibility skip link — first focusable element on the page */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 bg-white text-black px-4 py-2 rounded shadow z-50"
+      >
+        Skip to main content
+      </a>
+
       {/* Main wall */}
       <Wall
         notes={notes}
         onNoteClick={handleNoteClick}
-        onFlagNote={handleFlagNote}
         onViewportChange={handleViewportChange}
         isLoading={isLoading}
+        isViewportReady={viewportReady}
         isPlacingNote={isPlacingNote}
         pendingNote={pendingNote}
         onPlaceNote={handlePlaceNote}
@@ -200,6 +346,26 @@ export default function Home() {
         </button>
       )}
 
+      {/* Fetch error banner with retry */}
+      {fetchError && (
+        <StatusBanner role="alert">
+          <div
+            className="w-3 h-3 rounded-full flex-shrink-0"
+            style={{ backgroundColor: "var(--mta-red)" }}
+          />
+          <span className="text-white/90 text-sm" style={{ fontFamily: "var(--font-body)" }}>
+            Could not load notes.
+          </span>
+          <button
+            onClick={handleRetryFetch}
+            className="px-3 py-1 text-xs text-white hover:bg-white/10 rounded transition-colors tracking-wider uppercase"
+            style={{ fontFamily: "var(--font-display)", fontWeight: 600, backgroundColor: "var(--mta-red)" }}
+          >
+            Retry
+          </button>
+        </StatusBanner>
+      )}
+
       {/* Submitting overlay */}
       {isSubmitting && (
         <div className="fixed inset-0 modal-overlay flex items-center justify-center z-50">
@@ -212,46 +378,50 @@ export default function Home() {
         </div>
       )}
 
-      {/* Submission success message — MTA-style banner */}
-      {submissionMessage && (
-        <div
-          className="fixed top-4 left-1/2 station-chrome rounded-lg px-5 py-3 z-40 flex items-center gap-3"
-          style={{ animation: "slideDown 0.3s ease", transform: "translate(-50%, 0)" }}
-          role="status"
-          aria-live="polite"
-        >
-          <div className="mta-bullet-sm flex items-center justify-center rounded-full bg-[var(--mta-green)] text-white text-xs font-bold" style={{ width: 20, height: 20 }}>
-            &#10003;
+      {/* Toast — MTA-style banner for success and error feedback */}
+      {toast && (
+        <StatusBanner role="status">
+          <div
+            className="flex items-center justify-center rounded-full text-white text-xs font-bold flex-shrink-0"
+            style={{
+              width: 20,
+              height: 20,
+              backgroundColor:
+                toast.kind === "success" ? "var(--mta-green)" : "var(--mta-red)",
+            }}
+          >
+            {toast.kind === "success" ? "✓" : "!"}
           </div>
           <span className="text-white/90 text-sm" style={{ fontFamily: "var(--font-body)" }}>
-            {submissionMessage}
+            {toast.text}
           </span>
-        </div>
+        </StatusBanner>
       )}
 
-      {/* Note creator modal */}
-      <NoteCreator
-        isOpen={showCreator}
-        onClose={() => setShowCreator(false)}
-        onPreparePlace={handlePreparePlace}
-        canPost={canPost}
-        cantPostReason={cantPostReason}
-        timeUntilNextPost={timeUntilNextPost}
+      {/* Note detail modal — larger view + accessible reporting */}
+      <NoteDetailModal
+        note={selectedNote}
+        onClose={() => setSelectedNote(null)}
+        onReport={handleFlagNote}
       />
+
+      {/* Note creator modal — mounted fresh on each open so all drawing
+          state (canvas, hasDrawn, text) resets when it closes */}
+      {showCreator && (
+        <NoteCreator
+          onClose={() => setShowCreator(false)}
+          onPreparePlace={handlePreparePlace}
+          canPost={canPost}
+          cantPostReason={cantPostReason}
+          timeUntilNextPost={timeUntilNextPost}
+        />
+      )}
 
       {/* Onboarding popup */}
       <OnboardingPopup
         isOpen={showOnboarding}
         onClose={handleCloseOnboarding}
       />
-
-      {/* Accessibility skip link */}
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 bg-white px-4 py-2 rounded shadow z-50"
-      >
-        Skip to main content
-      </a>
 
       {/* Screen reader announcements */}
       <div className="sr-only" role="status" aria-live="polite">

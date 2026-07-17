@@ -95,9 +95,20 @@ export interface ConvexNote {
   sessionId?: string;
 }
 
+// Clamp a note's position onto the wall. Notes created before server-side
+// coordinate clamping existed can be stored out of bounds; clamping on read
+// keeps them visible on the wall instead of floating in the void.
+export function clampNoteToWall<T extends { x: number; y: number }>(note: T): T {
+  const maxX = WALL_CONFIG.wallWidth - WALL_CONFIG.noteWidth;
+  const maxY = WALL_CONFIG.wallHeight - WALL_CONFIG.noteHeight;
+  const x = Math.min(Math.max(note.x, 0), maxX);
+  const y = Math.min(Math.max(note.y, 0), maxY);
+  return x === note.x && y === note.y ? note : { ...note, x, y };
+}
+
 // Helper to convert Convex note to StickyNote
 export function mapConvexNote(note: ConvexNote): StickyNote {
-  return {
+  return clampNoteToWall({
     id: note.visibleId,
     imageUrl: note.imageUrl,
     color: note.color as NoteColor,
@@ -108,7 +119,7 @@ export function mapConvexNote(note: ConvexNote): StickyNote {
     moderationStatus: note.moderationStatus as ModerationStatus,
     flagCount: note.flagCount,
     sessionId: note.sessionId,
-  };
+  });
 }
 
 export type PublicStickyNote = Omit<StickyNote, "sessionId">;

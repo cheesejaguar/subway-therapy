@@ -88,6 +88,41 @@ describe("GET /api/admin/notes", () => {
     expect(response.status).toBe(200);
     expect(data.notes).toEqual(mockNotes);
     expect(data.stats).toEqual(mockStats);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("should strip sessionId from returned notes", async () => {
+    vi.mocked(storage.getNotesForModeration).mockResolvedValue([
+      {
+        id: "note-1",
+        imageUrl: "https://example.com/1.png",
+        color: "yellow",
+        x: 100,
+        y: 200,
+        rotation: 0,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        moderationStatus: "pending",
+        flagCount: 0,
+        sessionId: "internal-session-id",
+      },
+    ]);
+    vi.mocked(storage.getStats).mockResolvedValue({
+      total: 1,
+      pending: 1,
+      approved: 0,
+      rejected: 0,
+      flagged: 0,
+    });
+
+    const request = createMockRequest("http://localhost:3000/api/admin/notes");
+    const response = await GET(request);
+    const data = await parseResponse<{ notes: Array<Record<string, unknown>> }>(
+      response
+    );
+
+    expect(response.status).toBe(200);
+    expect(data.notes[0].id).toBe("note-1");
+    expect("sessionId" in data.notes[0]).toBe(false);
   });
 
   it("should filter by status when provided", async () => {

@@ -21,6 +21,10 @@ export default defineConfig({
         "src/app/globals.css",
         "src/app/page.tsx",
         "src/app/admin/page.tsx",
+        // Build-time image generation (verified via the build + smoke tests)
+        "src/app/opengraph-image.tsx",
+        "src/app/icon.tsx",
+        "src/app/apple-icon.tsx",
         "src/components/**",
         "**/*.d.ts",
       ],

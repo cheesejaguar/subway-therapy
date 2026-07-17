@@ -2,14 +2,14 @@ import { CreateNoteRequest, NOTE_COLORS, WALL_CONFIG } from "./types";
 
 const DATA_URL_PATTERN = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/;
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-const MAX_IMAGE_BYTES = 500_000;
+export const MAX_IMAGE_BYTES = 500_000;
 const NOTE_ID_PATTERN = /^[a-zA-Z0-9-]{8,128}$/;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function getBase64ByteLength(base64: string): number {
+export function getBase64ByteLength(base64: string): number {
   const trimmed = base64.replace(/\s/g, "");
   const paddingMatch = trimmed.match(/=+$/);
   const paddingLength = paddingMatch ? paddingMatch[0].length : 0;

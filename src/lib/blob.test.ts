@@ -34,6 +34,7 @@ describe("blob", () => {
         pathname: "notes/test.png",
         contentType: "image/png",
         contentDisposition: "inline",
+        etag: "test-etag",
       });
 
       const base64Data = "data:image/png;base64,iVBORw0KGgo=";
@@ -46,6 +47,8 @@ describe("blob", () => {
         {
           access: "public",
           contentType: "image/png",
+          addRandomSuffix: false,
+          cacheControlMaxAge: 31536000,
         }
       );
     });
@@ -58,6 +61,7 @@ describe("blob", () => {
         pathname: "notes/test.jpeg",
         contentType: "image/jpeg",
         contentDisposition: "inline",
+        etag: "test-etag",
       });
 
       const base64Data = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
@@ -69,6 +73,8 @@ describe("blob", () => {
         {
           access: "public",
           contentType: "image/jpeg",
+          addRandomSuffix: false,
+          cacheControlMaxAge: 31536000,
         }
       );
     });

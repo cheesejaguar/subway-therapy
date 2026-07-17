@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useModalDialog } from "./useModalDialog";
 
 interface OnboardingPopupProps {
   isOpen: boolean;
@@ -32,6 +33,8 @@ export default function OnboardingPopup({
   isOpen,
   onClose,
 }: OnboardingPopupProps) {
+  const dialogRef = useModalDialog({ isOpen, onClose });
+
   if (!isOpen) return null;
 
   return (
@@ -42,6 +45,7 @@ export default function OnboardingPopup({
       aria-labelledby="onboarding-title"
     >
       <div
+        ref={dialogRef}
         className="modal-card rounded-xl max-w-md w-full mx-4 overflow-hidden"
         style={{ animation: "slideUp 0.35s ease" }}
       >

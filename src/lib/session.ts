@@ -107,6 +107,102 @@ export async function canUserPostNote(): Promise<{
   return { canPost: true };
 }
 
+export interface SubmissionReservation {
+  reserved: boolean;
+  timeUntilNextPost?: number;
+  // "atomic": the reservation IS the daily-limit record — call release() to
+  // roll it back if the note fails downstream. "legacy": the atomic Convex
+  // mutation is unavailable (deployment skew or transient error), so the
+  // caller must record the submission after success via
+  // recordNoteSubmission(), exactly like the pre-reservation flow.
+  mode: "atomic" | "legacy";
+  release: () => Promise<void>;
+}
+
+const NOOP_RELEASE = async () => {};
+
+// Atomically claim the reporter's one-note-per-day slot. Unlike a separate
+// check-then-record pair, two concurrent posts cannot both pass this.
+export async function reserveNoteSubmission(): Promise<SubmissionReservation> {
+  const timestampIso = new Date().toISOString();
+  const nowMs = Date.parse(timestampIso);
+  pruneReporterSubmissionCache(nowMs);
+
+  const cookieStore = await cookies();
+  const sessionId = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  const { dailyReporterHash } = await getReporterHashes(sessionId);
+
+  if (isConvexAdminConfigured()) {
+    try {
+      const convex = getConvexAdminClient();
+      const result = await convex.mutation<
+        | { reserved: false; timeUntilNextPostMs: number }
+        | { reserved: true; submissionId: string }
+      >(internal.notes.reserveSubmission, {
+        reporterHash: dailyReporterHash,
+        createdAt: timestampIso,
+        nowMs,
+      });
+
+      if (!result.reserved) {
+        return {
+          reserved: false,
+          timeUntilNextPost: result.timeUntilNextPostMs,
+          mode: "atomic",
+          release: NOOP_RELEASE,
+        };
+      }
+
+      const submissionId = result.submissionId;
+      return {
+        reserved: true,
+        mode: "atomic",
+        release: async () => {
+          try {
+            const convexClient = getConvexAdminClient();
+            await convexClient.mutation<null>(internal.notes.releaseSubmission, {
+              submissionId,
+            });
+          } catch (error) {
+            console.error("Error releasing submission reservation:", error);
+          }
+        },
+      };
+    } catch (error) {
+      // Deployment skew (mutation not deployed yet) or a transient failure:
+      // degrade to the legacy check-then-record flow. canUserPostNote() has
+      // already checked the cooldown on this request.
+      console.error(
+        "Atomic submission reservation unavailable, using legacy flow:",
+        error
+      );
+      return { reserved: true, mode: "legacy", release: NOOP_RELEASE };
+    }
+  }
+
+  // In-memory path (dev): the check and the write happen synchronously with
+  // no await between them, so concurrent requests cannot interleave here.
+  const lastSubmissionMs = reporterLastSubmission.get(dailyReporterHash);
+  if (lastSubmissionMs && nowMs - lastSubmissionMs < ONE_DAY_MS) {
+    return {
+      reserved: false,
+      timeUntilNextPost: ONE_DAY_MS - (nowMs - lastSubmissionMs),
+      mode: "atomic",
+      release: NOOP_RELEASE,
+    };
+  }
+  reporterLastSubmission.set(dailyReporterHash, nowMs);
+  return {
+    reserved: true,
+    mode: "atomic",
+    release: async () => {
+      if (reporterLastSubmission.get(dailyReporterHash) === nowMs) {
+        reporterLastSubmission.delete(dailyReporterHash);
+      }
+    },
+  };
+}
+
 export async function recordNoteSubmission(): Promise<void> {
   const cookieStore = await cookies();
   const sessionId = cookieStore.get(SESSION_COOKIE_NAME)?.value;

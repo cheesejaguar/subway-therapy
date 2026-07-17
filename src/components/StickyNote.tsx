@@ -1,52 +1,54 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect } from "react";
 import { StickyNote, NOTE_COLORS } from "@/lib/types";
 
 interface StickyNoteProps {
   note: StickyNote;
-  onClick?: () => void;
-  onFlag?: () => void;
-  showFlagButton?: boolean;
+  onNoteClick?: (note: StickyNote) => void;
 }
 
-export default function StickyNoteComponent({
-  note,
-  onClick,
-  onFlag,
-  showFlagButton = true,
-}: StickyNoteProps) {
-  const [showMenu, setShowMenu] = useState(false);
-  const [imageError, setImageError] = useState(false);
+// Notes the user has already seen this session. Panning unmounts and
+// remounts notes as they leave and re-enter the viewport; only genuinely
+// new notes should replay the "appear" animation. Capped so a very long
+// session can't grow it without bound — clearing just replays an animation.
+const seenNoteIds = new Set<string>();
+const SEEN_NOTES_CAP = 20_000;
 
-  const bgColor = NOTE_COLORS[note.color];
+function markNoteSeen(id: string): void {
+  if (seenNoteIds.size >= SEEN_NOTES_CAP) {
+    seenNoteIds.clear();
+  }
+  seenNoteIds.add(id);
+}
+
+function StickyNoteComponent({ note, onNoteClick }: StickyNoteProps) {
+  const [imageError, setImageError] = React.useState(false);
+  // Captured once per mount: whether this note had ever been rendered before.
+  const [isNew] = React.useState(() => !seenNoteIds.has(note.id));
+
+  useEffect(() => {
+    markNoteSeen(note.id);
+  }, [note.id]);
+
+  const bgColor = NOTE_COLORS[note.color] ?? NOTE_COLORS.yellow;
   const rotation = note.rotation || 0;
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onClick) {
-      onClick();
-    }
-  };
-
-  const handleFlag = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (onFlag) {
-      onFlag();
-      setShowMenu(false);
-    }
+    onNoteClick?.(note);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onClick?.();
+      onNoteClick?.(note);
     }
   };
 
   return (
     <div
-      className="sticky-note note-appear group"
+      className={`sticky-note group ${isNew ? "note-appear" : ""}`}
       style={{
         backgroundColor: bgColor,
         left: note.x,
@@ -58,7 +60,7 @@ export default function StickyNoteComponent({
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="button"
-      aria-label={`Sticky note. Created ${new Date(note.createdAt).toLocaleDateString()}`}
+      aria-label={`Sticky note posted ${new Date(note.createdAt).toLocaleDateString()}. Press Enter to view.`}
     >
       {/* Note content */}
       <div className="w-full h-full overflow-hidden relative">
@@ -76,6 +78,10 @@ export default function StickyNoteComponent({
             src={note.imageUrl}
             alt="User created note content"
             className="w-full h-full object-contain"
+            width={130}
+            height={130}
+            loading="lazy"
+            decoding="async"
             onError={() => setImageError(true)}
           />
         ) : (
@@ -84,40 +90,6 @@ export default function StickyNoteComponent({
           </div>
         )}
       </div>
-
-      {/* Flag button — appears on hover */}
-      {showFlagButton && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setShowMenu(!showMenu);
-          }}
-          className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/10 hover:bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs"
-          aria-label="Note options"
-          aria-haspopup="menu"
-          aria-expanded={showMenu}
-        >
-          ...
-        </button>
-      )}
-
-      {/* Context menu — dark MTA-styled */}
-      {showMenu && (
-        <div
-          className="absolute top-8 right-1 rounded-lg shadow-xl py-1 z-50 min-w-[120px] border border-white/10"
-          style={{ background: "var(--station-dark)" }}
-          role="menu"
-        >
-          <button
-            onClick={handleFlag}
-            className="w-full px-4 py-2 text-left text-xs hover:bg-white/10 transition-colors"
-            style={{ color: "var(--mta-red)", fontFamily: "var(--font-display)", fontWeight: 600 }}
-            role="menuitem"
-          >
-            Report note
-          </button>
-        </div>
-      )}
 
       {/* Flagged indicator — MTA warning style */}
       {note.flagCount > 0 && (
@@ -132,3 +104,7 @@ export default function StickyNoteComponent({
     </div>
   );
 }
+
+// Memoized: the Wall re-renders on every pan/zoom frame, and individual
+// notes must not reconcile unless their own data changed.
+export default React.memo(StickyNoteComponent);

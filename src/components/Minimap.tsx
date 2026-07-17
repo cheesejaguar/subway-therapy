@@ -132,8 +132,38 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
     [navigateToPosition]
   );
 
-  const currentFeet = Math.round(
-    ((viewportBounds.minX + viewportBounds.maxX) / 2) / (wallWidth / 1000)
+  const viewportCenterX = Math.max(
+    0,
+    Math.min(wallWidth, (viewportBounds.minX + viewportBounds.maxX) / 2)
+  );
+  const currentFeet = Math.round(viewportCenterX / (wallWidth / 1000));
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const step = e.shiftKey ? 20000 : 5000;
+      let targetX: number | null = null;
+
+      switch (e.key) {
+        case "ArrowLeft":
+          targetX = Math.max(0, viewportCenterX - step);
+          break;
+        case "ArrowRight":
+          targetX = Math.min(wallWidth, viewportCenterX + step);
+          break;
+        case "Home":
+          targetX = 0;
+          break;
+        case "End":
+          targetX = wallWidth;
+          break;
+        default:
+          return;
+      }
+
+      e.preventDefault();
+      onNavigate(targetX, wallHeight / 2);
+    },
+    [viewportCenterX, wallWidth, wallHeight, onNavigate]
   );
 
   return (
@@ -179,11 +209,14 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
         style={{ width: sliderWidth, height: sliderHeight }}
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
+        onKeyDown={handleKeyDown}
+        tabIndex={0}
         role="slider"
-        aria-label="Wall position slider"
+        aria-label="Wall position, in feet from the left end"
         aria-valuemin={0}
         aria-valuemax={1000}
         aria-valuenow={currentFeet}
+        aria-valuetext={`${currentFeet} feet`}
       >
         {/* Station dots along the line */}
         {[0.1, 0.25, 0.5, 0.75, 0.9].map((pos) => (
