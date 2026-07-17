@@ -1,5 +1,23 @@
 import type { Metadata, Viewport } from "next";
+import { Barlow, Barlow_Condensed } from "next/font/google";
 import "./globals.css";
+
+// Self-hosted via next/font: no external font requests, no CSP exceptions,
+// metric-adjusted fallbacks to avoid layout shift. The variable names match
+// the var(--font-display)/var(--font-body) references used throughout the app.
+const barlowBody = Barlow({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-body",
+  display: "swap",
+});
+
+const barlowDisplay = Barlow_Condensed({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--font-display",
+  display: "swap",
+});
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://subwaytherapy.net";
 
@@ -38,6 +56,9 @@ export const metadata: Metadata = {
       "max-snippet": -1,
     },
   },
+  // The Open Graph / Twitter images, icons, and web manifest are provided by
+  // the App Router file conventions: opengraph-image.tsx, icon.tsx,
+  // apple-icon.tsx, and manifest.ts.
   openGraph: {
     type: "website",
     locale: "en_US",
@@ -45,28 +66,13 @@ export const metadata: Metadata = {
     siteName: "Subway Therapy",
     title: "Subway Therapy",
     description: "Leave a note on the virtual subway wall. Share your thoughts with the world.",
-    images: [
-      {
-        url: "/og-image.svg",
-        width: 1200,
-        height: 630,
-        alt: "Subway Therapy - Virtual sticky note wall",
-      },
-    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "Subway Therapy",
     description: "Leave a note on the virtual subway wall. Share your thoughts with the world.",
-    images: ["/og-image.svg"],
     creator: "@subwaytherapy",
   },
-  icons: {
-    icon: "/favicon.ico",
-    shortcut: "/favicon.ico",
-    apple: "/favicon.ico",
-  },
-  manifest: "/site.webmanifest",
   alternates: {
     canonical: siteUrl,
   },
@@ -108,7 +114,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${barlowBody.variable} ${barlowDisplay.variable}`}>
       <head>
         <script
           type="application/ld+json"

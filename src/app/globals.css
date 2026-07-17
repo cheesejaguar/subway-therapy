@@ -1,10 +1,10 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Barlow:wght@400;500;600;700&display=swap');
+
+/* Fonts: --font-display (Barlow Condensed) and --font-body (Barlow) are
+   provided by next/font in src/app/layout.tsx — self-hosted, no external
+   requests, with metric-adjusted fallbacks. */
 
 :root {
-  --font-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
-  --font-body: 'Barlow', 'Helvetica Neue', Helvetica, sans-serif;
-
   /* MTA subway line colors */
   --mta-red: #EE352E;
   --mta-orange: #FF6319;
@@ -30,15 +30,8 @@
   --station-platform: #3A3A3A;
   --station-ceiling: #282828;
 
-  /* Sticky note colors — warm, analog, real Post-it feel */
-  --note-yellow: #FFE066;
-  --note-pink: #FF85A1;
-  --note-blue: #6EC6FF;
-  --note-green: #81D4A8;
-  --note-orange: #FFB366;
-  --note-purple: #C9A0DC;
-  --note-white: #F8F6F0;
-  --note-coral: #FF7F7F;
+  /* Sticky note fills live in NOTE_COLORS (src/lib/types.ts) — the single
+     source of truth, since the colors are also baked into note images. */
 
   /* Ink colors */
   --ink-black: #1A1A1A;
@@ -59,7 +52,6 @@
 
 @theme inline {
   --font-sans: var(--font-body);
-  --font-display: var(--font-display);
 }
 
 * {
