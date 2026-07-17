@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+import { noStoreJson } from "@/lib/http";
 import {
   clearAdminSessionCookie,
   createAdminSessionToken,
@@ -10,10 +11,7 @@ import {
 } from "@/lib/admin-auth";
 
 function configurationErrorResponse() {
-  return NextResponse.json(
-    { error: "Admin authentication is not configured" },
-    { status: 503 }
-  );
+  return noStoreJson({ error: "Admin authentication is not configured" }, 503);
 }
 
 export async function GET(request: NextRequest) {
@@ -21,7 +19,7 @@ export async function GET(request: NextRequest) {
     return configurationErrorResponse();
   }
 
-  return NextResponse.json({
+  return noStoreJson({
     authenticated: isAdminRequestAuthenticated(request),
   });
 }
@@ -32,23 +30,23 @@ export async function POST(request: NextRequest) {
   }
 
   if (!isSafeAdminOrigin(request)) {
-    return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
+    return noStoreJson({ error: "Invalid request origin" }, 403);
   }
 
   let payload: unknown;
   try {
     payload = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return noStoreJson({ error: "Invalid JSON body" }, 400);
   }
 
   const password = (payload as { password?: unknown })?.password;
   if (typeof password !== "string" || password.length === 0) {
-    return NextResponse.json({ error: "Password is required" }, { status: 400 });
+    return noStoreJson({ error: "Password is required" }, 400);
   }
 
   if (!isAdminPasswordValid(password)) {
-    return NextResponse.json({ error: "Invalid password" }, { status: 401 });
+    return noStoreJson({ error: "Invalid password" }, 401);
   }
 
   const token = createAdminSessionToken();
@@ -57,7 +55,7 @@ export async function POST(request: NextRequest) {
   }
 
   await setAdminSessionCookie(token);
-  return NextResponse.json({ success: true });
+  return noStoreJson({ success: true });
 }
 
 export async function DELETE(request: NextRequest) {
@@ -66,9 +64,9 @@ export async function DELETE(request: NextRequest) {
   }
 
   if (!isSafeAdminOrigin(request)) {
-    return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
+    return noStoreJson({ error: "Invalid request origin" }, 403);
   }
 
   await clearAdminSessionCookie();
-  return NextResponse.json({ success: true });
+  return noStoreJson({ success: true });
 }

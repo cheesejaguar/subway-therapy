@@ -17,6 +17,7 @@ import {
   getOrCreateSessionId,
   getSessionCookieConfig,
   canUserPostNote,
+  recordNoteSubmission,
   getNoteSubmissionCookieConfig,
 } from "@/lib/session";
 import { uploadNoteImage, deleteNoteImage } from "@/lib/blob";
@@ -33,6 +34,20 @@ import {
 import { moderateImage } from "@/lib/moderation";
 import { validateCreateNoteRequest } from "@/lib/validation";
 import { checkPostAttemptRateLimit } from "@/lib/abuse";
+import { noStoreJson } from "@/lib/http";
+
+// The POST path can wait on an AI moderation round-trip.
+export const maxDuration = 60;
+
+// Public note reads are immutable-ish (they change only when moderation
+// approves or removes a note), so let the CDN absorb repeat viewport
+// fetches. The client requests tile-aligned integer bounds specifically so
+// these URLs repeat across users and pans.
+const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
+
+// Reject clearly oversized bodies before buffering/parsing them. The image
+// limit is 500KB decoded, ~667KB as base64, plus JSON envelope headroom.
+const MAX_REQUEST_BYTES = 800_000;
 
 // Initialize sample notes on first request (for dev mode only)
 let initialized = false;
@@ -70,6 +85,32 @@ function parseViewportBounds(request: NextRequest): {
   return { bounds: parsedBounds };
 }
 
+// Query approved notes in a bounds rectangle from Convex, preferring the
+// indexed range query and falling back to the legacy full-scan functions so
+// a deployment skew between Next and Convex never breaks reads.
+async function queryConvexNotesInBounds(bounds: ViewportBounds): Promise<ConvexNote[]> {
+  const convex = getConvexClient();
+  try {
+    return (await convex.query(api.notes.getApprovedNotesInRange, {
+      minX: bounds.minX,
+      maxX: bounds.maxX,
+      minY: bounds.minY,
+      maxY: bounds.maxY,
+    })) as ConvexNote[];
+  } catch (rangeError) {
+    console.warn(
+      "getApprovedNotesInRange unavailable, falling back to legacy query:",
+      rangeError
+    );
+    return (await convex.query(api.notes.getNotesInViewport, {
+      minX: bounds.minX,
+      maxX: bounds.maxX,
+      minY: bounds.minY,
+      maxY: bounds.maxY,
+    })) as ConvexNote[];
+  }
+}
+
 export async function GET(request: NextRequest) {
   const { bounds, error } = parseViewportBounds(request);
   if (error) {
@@ -80,20 +121,15 @@ export async function GET(request: NextRequest) {
     let notes: StickyNote[];
 
     if (isConvexConfigured()) {
-      const convex = getConvexClient();
-
-      if (bounds) {
-        const convexNotes = (await convex.query(api.notes.getNotesInViewport, {
-          minX: bounds.minX,
-          maxX: bounds.maxX,
-          minY: bounds.minY,
-          maxY: bounds.maxY,
-        })) as ConvexNote[];
-        notes = convexNotes.map(mapConvexNote);
-      } else {
-        const convexNotes = (await convex.query(api.notes.getPublicNotes, {})) as ConvexNote[];
-        notes = convexNotes.map(mapConvexNote);
-      }
+      // An unbounded request means the whole wall.
+      const effectiveBounds: ViewportBounds = bounds ?? {
+        minX: 0,
+        maxX: WALL_CONFIG.wallWidth,
+        minY: 0,
+        maxY: WALL_CONFIG.wallHeight,
+      };
+      const convexNotes = await queryConvexNotesInBounds(effectiveBounds);
+      notes = convexNotes.map(mapConvexNote);
     } else {
       // Fall back to in-memory storage for development
       if (!initialized) {
@@ -112,10 +148,16 @@ export async function GET(request: NextRequest) {
       .filter((note) => note.moderationStatus === "approved")
       .map(toPublicStickyNote);
 
-    return NextResponse.json({ notes: publicNotes });
+    return NextResponse.json(
+      { notes: publicNotes },
+      { headers: { "Cache-Control": PUBLIC_CACHE_CONTROL } }
+    );
   } catch (routeError) {
     console.error("Error fetching notes:", routeError);
-    return NextResponse.json({ error: "Failed to fetch notes" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to fetch notes" },
+      { status: 500, headers: { "Cache-Control": "no-store" } }
+    );
   }
 }
 
@@ -125,12 +167,12 @@ export async function POST(request: NextRequest) {
   try {
     const postRateLimit = await checkPostAttemptRateLimit();
     if (!postRateLimit.allowed) {
-      return NextResponse.json(
+      return noStoreJson(
         {
           error: "Too many attempts. Please wait before trying again.",
           retryAfterMs: postRateLimit.retryAfterMs,
         },
-        { status: 429 }
+        429
       );
     }
 
@@ -139,12 +181,21 @@ export async function POST(request: NextRequest) {
     // Check if user can post
     const postCheck = await canUserPostNote();
     if (!postCheck.canPost) {
-      return NextResponse.json(
+      return noStoreJson(
         {
           error: postCheck.reason,
           timeUntilNextPost: postCheck.timeUntilNextPost,
         },
-        { status: 429 }
+        429
+      );
+    }
+
+    // Refuse clearly oversized bodies before buffering them.
+    const contentLength = Number(request.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BYTES) {
+      return noStoreJson(
+        { error: "Request too large. Please keep images under 500KB." },
+        413
       );
     }
 
@@ -152,14 +203,80 @@ export async function POST(request: NextRequest) {
     try {
       payload = await request.json();
     } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+      return noStoreJson({ error: "Invalid JSON body" }, 400);
     }
 
     const validation = validateCreateNoteRequest(payload);
     if (!validation.ok) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return noStoreJson({ error: validation.error }, 400);
     }
     const body = validation.value;
+
+    // Fail fast on server misconfiguration before doing any paid work.
+    const convexConfigured = isConvexConfigured();
+    if (convexConfigured && !isConvexAdminConfigured()) {
+      return noStoreJson(
+        { error: "Server configuration error: missing Convex admin credentials" },
+        503
+      );
+    }
+
+    const position =
+      body.x != null && body.y != null
+        ? { x: body.x, y: body.y }
+        : findAvailablePosition();
+
+    // Validate overlap BEFORE uploading or moderating, so a rejected
+    // placement costs neither blob storage nor AI tokens.
+    if (body.x != null && body.y != null) {
+      // Get nearby notes to check overlap
+      const checkBounds: ViewportBounds = {
+        minX: position.x - WALL_CONFIG.noteWidth * 2,
+        maxX: position.x + WALL_CONFIG.noteWidth * 2,
+        minY: position.y - WALL_CONFIG.noteHeight * 2,
+        maxY: position.y + WALL_CONFIG.noteHeight * 2,
+      };
+
+      // Overlap validation is best-effort: a transient failure to read
+      // nearby notes should not block the user from placing their note.
+      let nearbyNotes: Array<{ x: number; y: number }> | null = null;
+
+      try {
+        if (convexConfigured) {
+          const convexNotes = await queryConvexNotesInBounds(checkBounds);
+          nearbyNotes = convexNotes.map((n) => ({ x: n.x, y: n.y }));
+        } else {
+          const allNotes = await getAllNotesInMemory();
+          nearbyNotes = allNotes
+            .filter(
+              (n) =>
+                n.x >= checkBounds.minX &&
+                n.x <= checkBounds.maxX &&
+                n.y >= checkBounds.minY &&
+                n.y <= checkBounds.maxY
+            )
+            .map((n) => ({ x: n.x, y: n.y }));
+        }
+      } catch (overlapError) {
+        console.error(
+          "Overlap check failed, skipping overlap validation:",
+          overlapError
+        );
+      }
+
+      if (nearbyNotes) {
+        const maxOverlap = getMaxOverlapWithNotes(position.x, position.y, nearbyNotes);
+
+        if (maxOverlap > MAX_OVERLAP_PERCENTAGE) {
+          return noStoreJson(
+            {
+              error: `Note placement would overlap too much with existing notes (${Math.round(maxOverlap * 100)}% overlap, max allowed is ${Math.round(MAX_OVERLAP_PERCENTAGE * 100)}%). Please choose a different location.`,
+            },
+            400
+          );
+        }
+      }
+    }
 
     // Generate note ID
     const noteId = crypto.randomUUID();
@@ -169,11 +286,11 @@ export async function POST(request: NextRequest) {
       uploadedImageUrl = await uploadNoteImage(body.imageData, noteId);
     } catch (uploadError) {
       console.error("Failed to upload image:", uploadError);
-      return NextResponse.json({ error: "Failed to upload image" }, { status: 500 });
+      return noStoreJson({ error: "Failed to upload image" }, 500);
     }
 
     if (!uploadedImageUrl) {
-      return NextResponse.json({ error: "Failed to upload image" }, { status: 500 });
+      return noStoreJson({ error: "Failed to upload image" }, 500);
     }
 
     // Run AI moderation on the image
@@ -202,77 +319,10 @@ export async function POST(request: NextRequest) {
       console.error("AI moderation failed, defaulting to pending:", moderationError);
     }
 
-    const position =
-      body.x != null && body.y != null
-        ? { x: body.x, y: body.y }
-        : findAvailablePosition();
-
-    // Validate overlap if user provided specific coordinates
-    if (body.x != null && body.y != null) {
-      // Get nearby notes to check overlap
-      const checkBounds: ViewportBounds = {
-        minX: position.x - WALL_CONFIG.noteWidth * 2,
-        maxX: position.x + WALL_CONFIG.noteWidth * 2,
-        minY: position.y - WALL_CONFIG.noteHeight * 2,
-        maxY: position.y + WALL_CONFIG.noteHeight * 2,
-      };
-
-      // Overlap validation is best-effort: a transient failure to read
-      // nearby notes should not block the user from placing their note.
-      let nearbyNotes: Array<{ x: number; y: number }> | null = null;
-
-      try {
-        if (isConvexConfigured()) {
-          const convex = getConvexClient();
-          const convexNotes = (await convex.query(
-            api.notes.getNotesInViewport,
-            checkBounds
-          )) as ConvexNote[];
-          nearbyNotes = convexNotes.map((n) => ({ x: n.x, y: n.y }));
-        } else {
-          const allNotes = await getAllNotesInMemory();
-          nearbyNotes = allNotes
-            .filter(
-              (n) =>
-                n.x >= checkBounds.minX &&
-                n.x <= checkBounds.maxX &&
-                n.y >= checkBounds.minY &&
-                n.y <= checkBounds.maxY
-            )
-            .map((n) => ({ x: n.x, y: n.y }));
-        }
-      } catch (overlapError) {
-        console.error(
-          "Overlap check failed, skipping overlap validation:",
-          overlapError
-        );
-      }
-
-      if (nearbyNotes) {
-        const maxOverlap = getMaxOverlapWithNotes(position.x, position.y, nearbyNotes);
-
-        if (maxOverlap > MAX_OVERLAP_PERCENTAGE) {
-          return NextResponse.json(
-            {
-              error: `Note placement would overlap too much with existing notes (${Math.round(maxOverlap * 100)}% overlap, max allowed is ${Math.round(MAX_OVERLAP_PERCENTAGE * 100)}%). Please choose a different location.`,
-            },
-            { status: 400 }
-          );
-        }
-      }
-    }
-
     const rotation = Math.random() * 6 - 3;
     const createdAt = new Date().toISOString();
 
-    if (isConvexConfigured()) {
-      if (!isConvexAdminConfigured()) {
-        return NextResponse.json(
-          { error: "Server configuration error: missing Convex admin credentials" },
-          { status: 503 }
-        );
-      }
-
+    if (convexConfigured) {
       try {
         const convex = getConvexAdminClient();
         await convex.mutation(internal.notes.createNote, {
@@ -292,10 +342,7 @@ export async function POST(request: NextRequest) {
         if (uploadedImageUrl) {
           await deleteNoteImage(uploadedImageUrl);
         }
-        return NextResponse.json(
-          { error: "Failed to save note. Please try again." },
-          { status: 502 }
-        );
+        return noStoreJson({ error: "Failed to save note. Please try again." }, 502);
       }
     } else {
       const note: StickyNote = {
@@ -313,6 +360,10 @@ export async function POST(request: NextRequest) {
       await createNoteInMemory(note);
     }
 
+    // Record the submission server-side so the one-note-per-day limit holds
+    // even when the client clears its cookies.
+    await recordNoteSubmission();
+
     // Generate appropriate message based on moderation status
     let message: string;
     if (moderationStatus === "approved") {
@@ -325,18 +376,27 @@ export async function POST(request: NextRequest) {
       message = "Note posted! It will be visible to others after moderation.";
     }
 
-    // Create response and set cookies on it
-    const response = NextResponse.json({
-      success: true,
-      note: {
-        id: noteId,
-        color: body.color,
-        x: position.x,
-        y: position.y,
-        moderationStatus,
+    // Create response and set cookies on it. The full note payload lets the
+    // client show the poster's own note immediately even though public GETs
+    // are CDN-cached for a short window.
+    const response = NextResponse.json(
+      {
+        success: true,
+        note: {
+          id: noteId,
+          imageUrl: uploadedImageUrl,
+          color: body.color,
+          x: position.x,
+          y: position.y,
+          rotation,
+          createdAt,
+          moderationStatus,
+          flagCount: 0,
+        },
+        message,
       },
-      message,
-    });
+      { headers: { "Cache-Control": "no-store" } }
+    );
 
     // Set session cookie on response
     const sessionCookie = getSessionCookieConfig(sessionId);
@@ -353,6 +413,6 @@ export async function POST(request: NextRequest) {
     }
 
     console.error("Error creating note:", routeError);
-    return NextResponse.json({ error: "Failed to create note" }, { status: 500 });
+    return noStoreJson({ error: "Failed to create note" }, 500);
   }
 }

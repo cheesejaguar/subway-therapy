@@ -25,6 +25,8 @@ describe("GET /api/session", () => {
     expect(data.canPost).toBe(true);
     expect(data.reason).toBeUndefined();
     expect(data.timeUntilNextPost).toBeUndefined();
+    // Cookie-dependent responses must never be CDN-cached.
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("should return canPost false with reason when user cannot post", async () => {

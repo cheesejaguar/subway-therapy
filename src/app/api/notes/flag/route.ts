@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+import { noStoreJson } from "@/lib/http";
 import { internal } from "../../../../../convex/_generated/api";
 import {
   getConvexAdminClient,
@@ -14,12 +15,12 @@ export async function POST(request: NextRequest) {
   try {
     const flagRateLimit = await checkFlagRateLimit();
     if (!flagRateLimit.allowed) {
-      return NextResponse.json(
+      return noStoreJson(
         {
           error: "Too many reports submitted. Please wait before reporting more notes.",
           retryAfterMs: flagRateLimit.retryAfterMs,
         },
-        { status: 429 }
+        429
       );
     }
 
@@ -27,22 +28,19 @@ export async function POST(request: NextRequest) {
     try {
       payload = await request.json();
     } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+      return noStoreJson({ error: "Invalid JSON body" }, 400);
     }
 
     const noteIdResult = validateNoteId((payload as { noteId?: unknown })?.noteId);
     if (!noteIdResult.ok) {
-      return NextResponse.json({ error: "Missing note ID" }, { status: 400 });
+      return noStoreJson({ error: "Missing note ID" }, 400);
     }
     const noteId = noteIdResult.value;
     const reporterHash = await getReporterHash();
 
     if (isConvexConfigured()) {
       if (!isConvexAdminConfigured()) {
-        return NextResponse.json(
-          { error: "Server configuration error: missing Convex admin credentials" },
-          { status: 503 }
-        );
+        return noStoreJson({ error: "Server configuration error: missing Convex admin credentials" }, 503);
       }
 
       const convex = getConvexAdminClient();
@@ -55,14 +53,14 @@ export async function POST(request: NextRequest) {
       );
 
       if (!result) {
-        return NextResponse.json({ error: "Note not found" }, { status: 404 });
+        return noStoreJson({ error: "Note not found" }, 404);
       }
 
       const message = result.duplicate
         ? "You already reported this note."
         : "Thank you for reporting. Our moderators will review this note.";
 
-      return NextResponse.json({
+      return noStoreJson({
         success: true,
         message,
         flagCount: result.flagCount,
@@ -72,7 +70,7 @@ export async function POST(request: NextRequest) {
     // Fall back to in-memory storage
     const note = await getNote(noteId);
     if (!note) {
-      return NextResponse.json({ error: "Note not found" }, { status: 404 });
+      return noStoreJson({ error: "Note not found" }, 404);
     }
 
     const updated = await flagNoteInMemory(noteId, reporterHash);
@@ -80,13 +78,13 @@ export async function POST(request: NextRequest) {
       ? "You already reported this note."
       : "Thank you for reporting. Our moderators will review this note.";
 
-    return NextResponse.json({
+    return noStoreJson({
       success: true,
       message,
       flagCount: updated.note?.flagCount,
     });
   } catch (routeError) {
     console.error("Error flagging note:", routeError);
-    return NextResponse.json({ error: "Failed to flag note" }, { status: 500 });
+    return noStoreJson({ error: "Failed to flag note" }, 500);
   }
 }

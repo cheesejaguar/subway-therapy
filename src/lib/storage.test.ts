@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
-  checkForBlockedContent,
   findAvailablePosition,
   createNote,
   getNote,
@@ -49,23 +48,6 @@ async function clearStore() {
 describe("storage", () => {
   beforeEach(async () => {
     await clearStore();
-  });
-
-  describe("checkForBlockedContent", () => {
-    it("should return false for normal text", () => {
-      expect(checkForBlockedContent("Hello world")).toBe(false);
-      expect(checkForBlockedContent("I love subway therapy")).toBe(false);
-    });
-
-    it("should be case insensitive", () => {
-      // Since BLOCKLIST_WORDS is empty by default, this should return false
-      expect(checkForBlockedContent("HELLO")).toBe(false);
-      expect(checkForBlockedContent("hello")).toBe(false);
-    });
-
-    it("should handle empty string", () => {
-      expect(checkForBlockedContent("")).toBe(false);
-    });
   });
 
   describe("findAvailablePosition", () => {

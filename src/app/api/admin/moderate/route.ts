@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { noStoreJson } from "@/lib/http";
 import { internal } from "../../../../../convex/_generated/api";
 import {
   getConvexAdminClient,
@@ -19,18 +20,15 @@ import {
 
 function ensureAdminAuthorized(request: NextRequest): NextResponse | null {
   if (!isAdminConfigured()) {
-    return NextResponse.json(
-      { error: "Admin authentication is not configured" },
-      { status: 503 }
-    );
+    return noStoreJson({ error: "Admin authentication is not configured" }, 503);
   }
 
   if (!isAdminRequestAuthenticated(request)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return noStoreJson({ error: "Unauthorized" }, 401);
   }
 
   if (!isSafeAdminOrigin(request)) {
-    return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
+    return noStoreJson({ error: "Invalid request origin" }, 403);
   }
 
   return null;
@@ -45,22 +43,19 @@ export async function POST(request: NextRequest) {
     try {
       payload = await request.json();
     } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+      return noStoreJson({ error: "Invalid JSON body" }, 400);
     }
 
     const validation = validateAdminModerationRequest(payload);
     if (!validation.ok) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return noStoreJson({ error: validation.error }, 400);
     }
 
     const { noteId, action } = validation.value;
 
     if (isConvexConfigured()) {
       if (!isConvexAdminConfigured()) {
-        return NextResponse.json(
-          { error: "Server configuration error: missing Convex admin credentials" },
-          { status: 503 }
-        );
+        return noStoreJson({ error: "Server configuration error: missing Convex admin credentials" }, 503);
       }
 
       const convex = getConvexAdminClient();
@@ -76,7 +71,7 @@ export async function POST(request: NextRequest) {
             }
           );
           if (!result) {
-            return NextResponse.json({ error: "Note not found" }, { status: 404 });
+            return noStoreJson({ error: "Note not found" }, 404);
           }
           break;
         }
@@ -88,7 +83,7 @@ export async function POST(request: NextRequest) {
             }
           );
           if (!deleteResult.success) {
-            return NextResponse.json({ error: "Note not found" }, { status: 404 });
+            return noStoreJson({ error: "Note not found" }, 404);
           }
           if (deleteResult.imageUrl) {
             await deleteNoteImage(deleteResult.imageUrl);
@@ -99,7 +94,7 @@ export async function POST(request: NextRequest) {
     } else {
       const note = await getNote(noteId);
       if (!note) {
-        return NextResponse.json({ error: "Note not found" }, { status: 404 });
+        return noStoreJson({ error: "Note not found" }, 404);
       }
 
       switch (action) {
@@ -115,10 +110,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ success: true });
+    return noStoreJson({ success: true });
   } catch (routeError) {
     console.error("Error moderating note:", routeError);
-    return NextResponse.json({ error: "Failed to moderate note" }, { status: 500 });
+    return noStoreJson({ error: "Failed to moderate note" }, 500);
   }
 }
 
@@ -131,12 +126,12 @@ export async function PUT(request: NextRequest) {
     try {
       payload = await request.json();
     } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+      return noStoreJson({ error: "Invalid JSON body" }, 400);
     }
 
     const validation = validateAdminBatchModerationRequest(payload);
     if (!validation.ok) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return noStoreJson({ error: validation.error }, 400);
     }
 
     const { noteIds, action } = validation.value;
@@ -202,12 +197,12 @@ export async function PUT(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({
+    return noStoreJson({
       success: results.every((result) => result.success),
       results,
     });
   } catch (routeError) {
     console.error("Error batch moderating notes:", routeError);
-    return NextResponse.json({ error: "Failed to batch moderate notes" }, { status: 500 });
+    return noStoreJson({ error: "Failed to batch moderate notes" }, 500);
   }
 }

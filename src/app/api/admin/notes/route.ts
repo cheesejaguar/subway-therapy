@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+import { noStoreJson } from "@/lib/http";
 import { internal } from "../../../../../convex/_generated/api";
 import {
   getConvexAdminClient,
@@ -6,7 +7,12 @@ import {
   isConvexConfigured,
 } from "@/lib/convex";
 import { getNotesForModeration, getStats } from "@/lib/storage";
-import { ModerationStatus, ConvexNote, mapConvexNote } from "@/lib/types";
+import {
+  ModerationStatus,
+  ConvexNote,
+  mapConvexNote,
+  toPublicStickyNote,
+} from "@/lib/types";
 import { isAdminConfigured, isAdminRequestAuthenticated } from "@/lib/admin-auth";
 
 function isModerationStatus(value: string | null): value is ModerationStatus {
@@ -15,21 +21,18 @@ function isModerationStatus(value: string | null): value is ModerationStatus {
 
 export async function GET(request: NextRequest) {
   if (!isAdminConfigured()) {
-    return NextResponse.json(
-      { error: "Admin authentication is not configured" },
-      { status: 503 }
-    );
+    return noStoreJson({ error: "Admin authentication is not configured" }, 503);
   }
 
   if (!isAdminRequestAuthenticated(request)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return noStoreJson({ error: "Unauthorized" }, 401);
   }
 
   const statusParam = request.nextUrl.searchParams.get("status");
   let status: ModerationStatus | undefined;
   if (statusParam !== null) {
     if (!isModerationStatus(statusParam)) {
-      return NextResponse.json({ error: "Invalid moderation status filter" }, { status: 400 });
+      return noStoreJson({ error: "Invalid moderation status filter" }, 400);
     }
     status = statusParam;
   }
@@ -37,10 +40,7 @@ export async function GET(request: NextRequest) {
   try {
     if (isConvexConfigured()) {
       if (!isConvexAdminConfigured()) {
-        return NextResponse.json(
-          { error: "Server configuration error: missing Convex admin credentials" },
-          { status: 503 }
-        );
+        return noStoreJson({ error: "Server configuration error: missing Convex admin credentials" }, 503);
       }
 
       const convex = getConvexAdminClient();
@@ -56,15 +56,17 @@ export async function GET(request: NextRequest) {
         }>(internal.notes.getStats, {}),
       ]);
 
-      const notes = convexNotes.map(mapConvexNote);
-      return NextResponse.json({ notes, stats });
+      // Strip sessionId — it is an internal identifier and must not reach
+      // the browser, even for admins.
+      const notes = convexNotes.map(mapConvexNote).map(toPublicStickyNote);
+      return noStoreJson({ notes, stats });
     }
 
-    const notes = await getNotesForModeration(status);
+    const notes = (await getNotesForModeration(status)).map(toPublicStickyNote);
     const stats = await getStats();
-    return NextResponse.json({ notes, stats });
+    return noStoreJson({ notes, stats });
   } catch (routeError) {
     console.error("Error fetching notes for moderation:", routeError);
-    return NextResponse.json({ error: "Failed to fetch notes" }, { status: 500 });
+    return noStoreJson({ error: "Failed to fetch notes" }, 500);
   }
 }

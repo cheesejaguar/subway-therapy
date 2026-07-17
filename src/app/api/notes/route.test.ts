@@ -33,6 +33,7 @@ vi.mock("@/lib/session", () => ({
     options: { httpOnly: true, secure: false, sameSite: "lax", maxAge: 31536000, path: "/" },
   })),
   canUserPostNote: vi.fn(),
+  recordNoteSubmission: vi.fn(),
   getNoteSubmissionCookieConfig: vi.fn(() => ({
     name: "last_note_time",
     value: new Date().toISOString(),
@@ -93,6 +94,86 @@ describe("GET /api/notes", () => {
     expect(data.notes).toHaveLength(1);
     expect(data.notes[0].id).toBe("note-1");
     expect(data.notes[0].sessionId).toBeUndefined();
+  });
+
+  it("should mark successful responses as CDN-cacheable", async () => {
+    vi.mocked(storage.getAllNotes).mockResolvedValue([]);
+
+    const request = createMockRequest("http://localhost:3000/api/notes");
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=30, stale-while-revalidate=300"
+    );
+  });
+
+  it("should not cache error responses", async () => {
+    vi.mocked(storage.getAllNotes).mockRejectedValue(new Error("Database error"));
+
+    const request = createMockRequest("http://localhost:3000/api/notes");
+    const response = await GET(request);
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("should query Convex with the indexed range query and clamp legacy coordinates", async () => {
+    vi.mocked(convex.isConvexConfigured).mockReturnValue(true);
+    const convexQuery = vi.fn().mockResolvedValue([
+      {
+        visibleId: "legacy-note",
+        imageUrl: "https://example.com/legacy.png",
+        color: "yellow",
+        x: -3.5,
+        y: 5439.9,
+        rotation: 0,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        moderationStatus: "approved",
+        flagCount: 0,
+        sessionId: "s",
+      },
+    ]);
+    vi.mocked(convex.getConvexClient).mockReturnValue({
+      query: convexQuery,
+      mutation: vi.fn(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const request = createMockRequest(
+      "http://localhost:3000/api/notes?minX=0&maxX=2000&minY=0&maxY=4200"
+    );
+    const response = await GET(request);
+    const data = await parseResponse<{ notes: Array<StickyNote> }>(response);
+
+    expect(response.status).toBe(200);
+    expect(convexQuery).toHaveBeenCalledTimes(1);
+    expect(data.notes[0].x).toBe(0);
+    expect(data.notes[0].y).toBe(4050);
+    expect(data.notes[0].sessionId).toBeUndefined();
+  });
+
+  it("should fall back to the legacy query when the range query is unavailable", async () => {
+    vi.mocked(convex.isConvexConfigured).mockReturnValue(true);
+    const convexQuery = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Could not find public function"))
+      .mockResolvedValueOnce([]);
+    vi.mocked(convex.getConvexClient).mockReturnValue({
+      query: convexQuery,
+      mutation: vi.fn(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const request = createMockRequest(
+      "http://localhost:3000/api/notes?minX=0&maxX=2000&minY=0&maxY=4200"
+    );
+    const response = await GET(request);
+    const data = await parseResponse<{ notes: Array<StickyNote> }>(response);
+
+    expect(response.status).toBe(200);
+    expect(data.notes).toEqual([]);
+    expect(convexQuery).toHaveBeenCalledTimes(2);
   });
 
   it("should return notes within viewport bounds", async () => {
@@ -360,6 +441,54 @@ describe("POST /api/notes", () => {
     expect(data.note.id).toBe("test-uuid-1234");
     expect(data.note.moderationStatus).toBe("approved");
     expect(data.message).toContain("approved");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    // Server-side daily limit must be recorded on success.
+    expect(session.recordNoteSubmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("should return the full note payload so the client can render it optimistically", async () => {
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+        x: 100,
+        y: 200,
+      },
+    });
+
+    const response = await POST(request);
+    const data = await parseResponse<{
+      note: {
+        imageUrl: string;
+        rotation: number;
+        createdAt: string;
+        flagCount: number;
+      };
+    }>(response);
+
+    expect(data.note.imageUrl).toBe("https://blob.test/image.png");
+    expect(typeof data.note.rotation).toBe("number");
+    expect(typeof data.note.createdAt).toBe("string");
+    expect(data.note.flagCount).toBe(0);
+  });
+
+  it("should return 413 for oversized request bodies without parsing them", async () => {
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      body: {
+        imageData: "data:image/png;base64,test",
+        color: "yellow",
+      },
+      headers: { "content-length": "9000000" },
+    });
+
+    const response = await POST(request);
+    const data = await parseResponse<{ error: string }>(response);
+
+    expect(response.status).toBe(413);
+    expect(data.error).toContain("too large");
+    expect(blob.uploadNoteImage).not.toHaveBeenCalled();
   });
 
   it("should create a note with pending status for low confidence", async () => {
@@ -474,6 +603,10 @@ describe("POST /api/notes", () => {
 
     expect(response.status).toBe(400);
     expect(data.error).toContain("overlap");
+    // The overlap check runs before any paid work: no blob upload, no AI call.
+    expect(blob.uploadNoteImage).not.toHaveBeenCalled();
+    expect(moderation.moderateImage).not.toHaveBeenCalled();
+    expect(session.recordNoteSubmission).not.toHaveBeenCalled();
   });
 
   it("should use random position when not provided", async () => {
@@ -649,5 +782,7 @@ describe("POST /api/notes", () => {
 
     expect(response.status).toBe(503);
     expect(data.error).toContain("Convex admin credentials");
+    // The config check runs before upload, so no blob can leak.
+    expect(blob.uploadNoteImage).not.toHaveBeenCalled();
   });
 });

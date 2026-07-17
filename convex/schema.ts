@@ -24,6 +24,7 @@ export default defineSchema({
     .index("by_visibleId", ["visibleId"])
     .index("by_moderationStatus", ["moderationStatus"])
     .index("by_status_createdAt", ["moderationStatus", "createdAt"])
+    .index("by_status_x", ["moderationStatus", "x"])
     .index("by_sessionId", ["sessionId"]),
   flags: defineTable({
     visibleId: v.string(),

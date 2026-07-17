@@ -44,10 +44,13 @@ export async function uploadNoteImage(
     const ext = EXT_BY_MIME[mimeType.toLowerCase()] || "png";
     const filename = `notes/${noteId}.${ext}`;
 
-    // Upload to Vercel Blob
+    // Upload to Vercel Blob. Note images are immutable and named by a fresh
+    // UUID, so they get a deterministic pathname and a 1-year CDN cache.
     const blob = await put(filename, buffer, {
       access: "public",
       contentType: mimeType,
+      addRandomSuffix: false,
+      cacheControlMaxAge: 31536000,
     });
 
     return blob.url;

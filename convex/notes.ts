@@ -22,7 +22,38 @@ export const getPublicNotes = query({
   },
 });
 
-// Public query: viewport fetch, restricted to approved notes.
+// Public query: viewport fetch using the by_status_x range index so reads
+// scale with the requested slice of wall, not the total number of notes.
+// The wall is 600,000px wide but only 4,200px tall, so an x-range scan plus
+// a JS filter on y is effectively a spatial query.
+export const getApprovedNotesInRange = query({
+  args: {
+    minX: v.number(),
+    maxX: v.number(),
+    minY: v.number(),
+    maxY: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const padding = 200;
+    const notes = await ctx.db
+      .query("notes")
+      .withIndex("by_status_x", (q) =>
+        q
+          .eq("moderationStatus", "approved")
+          .gte("x", args.minX - padding)
+          .lte("x", args.maxX + padding)
+      )
+      .take(1000);
+
+    return notes.filter(
+      (note) => note.y >= args.minY - padding && note.y <= args.maxY + padding
+    );
+  },
+});
+
+// Legacy public query kept for deployment-skew compatibility: an older Next
+// deployment may still call it, and a newer Next deployment falls back to it
+// when this Convex deployment predates getApprovedNotesInRange.
 export const getNotesInViewport = query({
   args: {
     minX: v.number(),

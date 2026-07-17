@@ -106,6 +106,7 @@ describe("POST /api/notes/flag", () => {
     expect(data.flagCount).toBe(1);
     expect(data.message).toContain("Thank you for reporting");
     expect(storage.flagNote).toHaveBeenCalledWith("test-note", "reporter-hash");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("should acknowledge duplicate reports from the same reporter", async () => {
