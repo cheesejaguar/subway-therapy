@@ -30,9 +30,34 @@ interface Toast {
   text: string;
 }
 
+
+// Shared MTA-style status banner shell used by the toast and the fetch-error
+// banner (same chrome, position, and animation).
+function StatusBanner({
+  role,
+  children,
+}: {
+  role: "status" | "alert";
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="fixed top-4 left-1/2 station-chrome rounded-lg px-5 py-3 z-40 flex items-center gap-3"
+      style={{ animation: "slideDown 0.3s ease", transform: "translate(-50%, 0)" }}
+      role={role}
+      aria-live={role === "status" ? "polite" : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
 export default function Home() {
   const [notes, setNotes] = useState<PublicStickyNote[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // True once every tile covering the current viewport has been fetched at
+  // least once — gates the Wall's "empty" hint so it can't flash mid-fetch.
+  const [viewportReady, setViewportReady] = useState(false);
   const [fetchError, setFetchError] = useState(false);
   const [showCreator, setShowCreator] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -104,6 +129,16 @@ export default function Home() {
     setNotes(Array.from(notesCacheRef.current.values()));
   }, []);
 
+  const recomputeViewportReady = useCallback(() => {
+    const bounds = lastBoundsRef.current;
+    if (!bounds) return;
+    setViewportReady(
+      tileRangeForBounds(bounds).every((tile) =>
+        tileFetchedAtRef.current.has(tile)
+      )
+    );
+  }, []);
+
   const fetchTile = useCallback(
     async (tile: number, viewportCenterX: number) => {
       if (inflightRef.current.has(tile)) return;
@@ -138,6 +173,7 @@ export default function Home() {
         setFetchError(false);
         setIsLoading(false);
         publishCache(viewportCenterX);
+        recomputeViewportReady();
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
         console.error("Error fetching notes:", error);
@@ -147,7 +183,7 @@ export default function Home() {
         inflightRef.current.delete(tile);
       }
     },
-    [publishCache]
+    [publishCache, recomputeViewportReady]
   );
 
   const handleViewportChange = useCallback(
@@ -157,8 +193,9 @@ export default function Home() {
       for (const tile of tileRangeForBounds(bounds)) {
         void fetchTile(tile, centerX);
       }
+      recomputeViewportReady();
     },
-    [fetchTile]
+    [fetchTile, recomputeViewportReady]
   );
 
   const handleRetryFetch = useCallback(() => {
@@ -285,6 +322,7 @@ export default function Home() {
         onNoteClick={handleNoteClick}
         onViewportChange={handleViewportChange}
         isLoading={isLoading}
+        isViewportReady={viewportReady}
         isPlacingNote={isPlacingNote}
         pendingNote={pendingNote}
         onPlaceNote={handlePlaceNote}
@@ -310,11 +348,7 @@ export default function Home() {
 
       {/* Fetch error banner with retry */}
       {fetchError && (
-        <div
-          className="fixed top-4 left-1/2 station-chrome rounded-lg px-5 py-3 z-40 flex items-center gap-3"
-          style={{ animation: "slideDown 0.3s ease", transform: "translate(-50%, 0)" }}
-          role="alert"
-        >
+        <StatusBanner role="alert">
           <div
             className="w-3 h-3 rounded-full flex-shrink-0"
             style={{ backgroundColor: "var(--mta-red)" }}
@@ -329,7 +363,7 @@ export default function Home() {
           >
             Retry
           </button>
-        </div>
+        </StatusBanner>
       )}
 
       {/* Submitting overlay */}
@@ -346,12 +380,7 @@ export default function Home() {
 
       {/* Toast — MTA-style banner for success and error feedback */}
       {toast && (
-        <div
-          className="fixed top-4 left-1/2 station-chrome rounded-lg px-5 py-3 z-40 flex items-center gap-3"
-          style={{ animation: "slideDown 0.3s ease", transform: "translate(-50%, 0)" }}
-          role="status"
-          aria-live="polite"
-        >
+        <StatusBanner role="status">
           <div
             className="flex items-center justify-center rounded-full text-white text-xs font-bold flex-shrink-0"
             style={{
@@ -366,7 +395,7 @@ export default function Home() {
           <span className="text-white/90 text-sm" style={{ fontFamily: "var(--font-body)" }}>
             {toast.text}
           </span>
-        </div>
+        </StatusBanner>
       )}
 
       {/* Note detail modal — larger view + accessible reporting */}
@@ -380,7 +409,6 @@ export default function Home() {
           state (canvas, hasDrawn, text) resets when it closes */}
       {showCreator && (
         <NoteCreator
-          isOpen
           onClose={() => setShowCreator(false)}
           onPreparePlace={handlePreparePlace}
           canPost={canPost}

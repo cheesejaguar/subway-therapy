@@ -14,11 +14,14 @@ import {
   WALL_CONFIG,
   ViewportBounds,
   NOTE_COLORS,
+  clampNoteToWall,
   getMaxOverlapWithNotes,
   MAX_OVERLAP_PERCENTAGE,
 } from "@/lib/types";
 import {
   ViewState,
+  MIN_ZOOM,
+  MAX_ZOOM,
   clampViewToWall,
   zoomViewAt,
 } from "@/lib/viewport";
@@ -47,6 +50,9 @@ interface WallProps {
   onNoteClick?: (note: StickyNote) => void;
   onViewportChange?: (bounds: ViewportBounds) => void;
   isLoading?: boolean;
+  // False while a note fetch for the current viewport is still outstanding —
+  // gates the "empty wall" hint so it can't flash before data arrives.
+  isViewportReady?: boolean;
   isPlacingNote?: boolean;
   pendingNote?: PendingNote | null;
   onPlaceNote?: (x: number, y: number) => void;
@@ -56,18 +62,12 @@ interface WallProps {
 const { wallWidth, wallHeight, noteWidth, noteHeight } = WALL_CONFIG;
 const WALL_CENTER_X = wallWidth / 2;
 
-function clampGhostPosition(x: number, y: number): { x: number; y: number } {
-  return {
-    x: Math.min(Math.max(x, 0), wallWidth - noteWidth),
-    y: Math.min(Math.max(y, 0), wallHeight - noteHeight),
-  };
-}
-
 export default function Wall({
   notes,
   onNoteClick,
   onViewportChange,
   isLoading = false,
+  isViewportReady = true,
   isPlacingNote = false,
   pendingNote = null,
   onPlaceNote,
@@ -176,6 +176,28 @@ export default function Wall({
     []
   );
 
+  const bounds = getViewportBounds();
+
+  // Filter bounds are quantized outward so the resulting array identity only
+  // changes when the viewport crosses a 256px boundary — during a smooth pan
+  // the memoized StickyNote children skip re-rendering entirely.
+  const notePadding = 300;
+  const qMinX =
+    Math.floor((bounds.minX - notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
+  const qMaxX =
+    Math.ceil((bounds.maxX + notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
+  const qMinY =
+    Math.floor((bounds.minY - notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
+  const qMaxY =
+    Math.ceil((bounds.maxY + notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
+
+  const visibleNotes = useMemo(() => {
+    return notes.filter(
+      (note) =>
+        note.x >= qMinX && note.x <= qMaxX && note.y >= qMinY && note.y <= qMaxY
+    );
+  }, [notes, qMinX, qMaxX, qMinY, qMaxY]);
+
   const isPlacementValid = currentOverlap <= MAX_OVERLAP_PERCENTAGE;
 
   const updateGhostPosition = useCallback(
@@ -183,15 +205,19 @@ export default function Wall({
       const wallPos = screenToWall(clientX, clientY);
       // Clamp the preview exactly like the server clamps the stored note,
       // so what the user sees is where the note actually lands.
-      const newGhostPos = clampGhostPosition(
-        wallPos.x - noteWidth / 2,
-        wallPos.y - noteHeight / 2
-      );
+      const newGhostPos = clampNoteToWall({
+        x: wallPos.x - noteWidth / 2,
+        y: wallPos.y - noteHeight / 2,
+      });
       setGhostPosition(newGhostPos);
-      const overlap = getMaxOverlapWithNotes(newGhostPos.x, newGhostPos.y, notes);
+      const overlap = getMaxOverlapWithNotes(
+        newGhostPos.x,
+        newGhostPos.y,
+        visibleNotes
+      );
       setCurrentOverlap(overlap);
     },
-    [screenToWall, notes]
+    [screenToWall, visibleNotes]
   );
 
   const handleClick = useCallback(
@@ -211,17 +237,17 @@ export default function Wall({
     (clientX: number, clientY: number) => {
       if (isPlacingNote && onPlaceNote) {
         const wallPos = screenToWall(clientX, clientY);
-        const notePos = clampGhostPosition(
-          wallPos.x - noteWidth / 2,
-          wallPos.y - noteHeight / 2
-        );
-        const overlap = getMaxOverlapWithNotes(notePos.x, notePos.y, notes);
+        const notePos = clampNoteToWall({
+          x: wallPos.x - noteWidth / 2,
+          y: wallPos.y - noteHeight / 2,
+        });
+        const overlap = getMaxOverlapWithNotes(notePos.x, notePos.y, visibleNotes);
         if (overlap <= MAX_OVERLAP_PERCENTAGE) {
           onPlaceNote(notePos.x, notePos.y);
         }
       }
     },
-    [isPlacingNote, onPlaceNote, screenToWall, notes]
+    [isPlacingNote, onPlaceNote, screenToWall, visibleNotes]
   );
 
   useGesture(
@@ -320,7 +346,7 @@ export default function Wall({
         preventDefault: true,
       },
       pinch: {
-        scaleBounds: { min: 0.25, max: 2 },
+        scaleBounds: { min: MIN_ZOOM, max: MAX_ZOOM },
         rubberband: true,
         pointer: { touch: true },
         preventDefault: true,
@@ -358,21 +384,25 @@ export default function Wall({
     }));
   }, [setClampedView]);
 
+  // Zoom by a factor, anchored to the viewport center (buttons + keyboard).
+  const zoomAtCenterBy = useCallback(
+    (factor: number) => {
+      zoomAtPoint(
+        sizeRef.current.width / 2,
+        sizeRef.current.height / 2,
+        viewRef.current.zoom * factor
+      );
+    },
+    [zoomAtPoint]
+  );
+
   const handleZoomIn = useCallback(() => {
-    zoomAtPoint(
-      sizeRef.current.width / 2,
-      sizeRef.current.height / 2,
-      viewRef.current.zoom * BUTTON_ZOOM_STEP
-    );
-  }, [zoomAtPoint]);
+    zoomAtCenterBy(BUTTON_ZOOM_STEP);
+  }, [zoomAtCenterBy]);
 
   const handleZoomOut = useCallback(() => {
-    zoomAtPoint(
-      sizeRef.current.width / 2,
-      sizeRef.current.height / 2,
-      viewRef.current.zoom / BUTTON_ZOOM_STEP
-    );
-  }, [zoomAtPoint]);
+    zoomAtCenterBy(1 / BUTTON_ZOOM_STEP);
+  }, [zoomAtCenterBy]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -398,20 +428,12 @@ export default function Wall({
         case "+":
         case "=":
           e.preventDefault();
-          zoomAtPoint(
-            sizeRef.current.width / 2,
-            sizeRef.current.height / 2,
-            viewRef.current.zoom * KEYBOARD_ZOOM_STEP
-          );
+          zoomAtCenterBy(KEYBOARD_ZOOM_STEP);
           break;
         case "-":
         case "_":
           e.preventDefault();
-          zoomAtPoint(
-            sizeRef.current.width / 2,
-            sizeRef.current.height / 2,
-            viewRef.current.zoom / KEYBOARD_ZOOM_STEP
-          );
+          zoomAtCenterBy(1 / KEYBOARD_ZOOM_STEP);
           break;
         case "0":
           e.preventDefault();
@@ -419,10 +441,8 @@ export default function Wall({
           break;
       }
     },
-    [setClampedView, zoomAtPoint, handleResetView]
+    [setClampedView, zoomAtCenterBy, handleResetView]
   );
-
-  const bounds = getViewportBounds();
 
   const visibleTiles = useMemo(() => {
     const tiles: { x: number; y: number; key: string }[] = [];
@@ -452,26 +472,6 @@ export default function Wall({
     return tiles;
   }, [bounds.minX, bounds.maxX, bounds.minY, bounds.maxY]);
 
-  // Filter bounds are quantized outward so the resulting array identity only
-  // changes when the viewport crosses a 256px boundary — during a smooth pan
-  // the memoized StickyNote children skip re-rendering entirely.
-  const notePadding = 300;
-  const qMinX =
-    Math.floor((bounds.minX - notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
-  const qMaxX =
-    Math.ceil((bounds.maxX + notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
-  const qMinY =
-    Math.floor((bounds.minY - notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
-  const qMaxY =
-    Math.ceil((bounds.maxY + notePadding) / VISIBLE_QUANTUM) * VISIBLE_QUANTUM;
-
-  const visibleNotes = useMemo(() => {
-    return notes.filter(
-      (note) =>
-        note.x >= qMinX && note.x <= qMaxX && note.y >= qMinY && note.y <= qMaxY
-    );
-  }, [notes, qMinX, qMaxX, qMinY, qMaxY]);
-
   const handleMinimapNavigate = useCallback(
     (wallX: number, wallY: number) => {
       setClampedView((v) => ({
@@ -484,7 +484,11 @@ export default function Wall({
   );
 
   const showEmptyHint =
-    hasInitialized && !isLoading && !isPlacingNote && visibleNotes.length === 0;
+    hasInitialized &&
+    !isLoading &&
+    isViewportReady &&
+    !isPlacingNote &&
+    visibleNotes.length === 0;
 
   return (
     <div

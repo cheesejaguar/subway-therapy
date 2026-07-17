@@ -37,6 +37,21 @@ const mtaStripe: React.CSSProperties = {
   backgroundPosition: "top left",
 };
 
+// One tile per moderation bucket; yellow needs dark text for contrast.
+const STAT_TILES: Array<{
+  key: keyof Stats;
+  label: string;
+  bullet: string;
+  bulletColor: string;
+  bulletText?: string;
+}> = [
+  { key: "total", label: "Total", bullet: "T", bulletColor: "var(--mta-blue)" },
+  { key: "pending", label: "Pending", bullet: "P", bulletColor: "var(--mta-yellow)", bulletText: "#1A1A1A" },
+  { key: "approved", label: "Approved", bullet: "A", bulletColor: "var(--mta-green)" },
+  { key: "rejected", label: "Rejected", bullet: "R", bulletColor: "var(--mta-red)" },
+  { key: "flagged", label: "Flagged", bullet: "F", bulletColor: "var(--mta-orange)" },
+];
+
 export default function AdminDashboard() {
   const [notes, setNotes] = useState<StickyNote[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -329,94 +344,26 @@ export default function AdminDashboard() {
         {/* Stats cards */}
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-            <div className="station-chrome rounded-lg p-4">
-              <div
-                className="flex items-center gap-2 text-[11px] text-white/60 uppercase tracking-widest"
-                style={condensedLabel}
-              >
-                <span
-                  className="mta-bullet-sm"
-                  style={{ backgroundColor: "var(--mta-blue)" }}
-                  aria-hidden="true"
+            {STAT_TILES.map((tile) => (
+              <div key={tile.key} className="station-chrome rounded-lg p-4">
+                <div
+                  className="flex items-center gap-2 text-[11px] text-white/60 uppercase tracking-widest"
+                  style={condensedLabel}
                 >
-                  T
-                </span>
-                Total
+                  <span
+                    className="mta-bullet-sm"
+                    style={{ backgroundColor: tile.bulletColor, color: tile.bulletText }}
+                    aria-hidden="true"
+                  >
+                    {tile.bullet}
+                  </span>
+                  {tile.label}
+                </div>
+                <div className="text-2xl font-bold text-white mt-1" style={displayFont}>
+                  {stats[tile.key]}
+                </div>
               </div>
-              <div className="text-2xl font-bold text-white mt-1" style={displayFont}>{stats.total}</div>
-            </div>
-            <div className="station-chrome rounded-lg p-4">
-              <div
-                className="flex items-center gap-2 text-[11px] text-white/60 uppercase tracking-widest"
-                style={condensedLabel}
-              >
-                <span
-                  className="mta-bullet-sm"
-                  style={{ backgroundColor: "var(--mta-yellow)", color: "#1A1A1A" }}
-                  aria-hidden="true"
-                >
-                  P
-                </span>
-                Pending
-              </div>
-              <div className="text-2xl font-bold text-white mt-1" style={displayFont}>
-                {stats.pending}
-              </div>
-            </div>
-            <div className="station-chrome rounded-lg p-4">
-              <div
-                className="flex items-center gap-2 text-[11px] text-white/60 uppercase tracking-widest"
-                style={condensedLabel}
-              >
-                <span
-                  className="mta-bullet-sm"
-                  style={{ backgroundColor: "var(--mta-green)" }}
-                  aria-hidden="true"
-                >
-                  A
-                </span>
-                Approved
-              </div>
-              <div className="text-2xl font-bold text-white mt-1" style={displayFont}>
-                {stats.approved}
-              </div>
-            </div>
-            <div className="station-chrome rounded-lg p-4">
-              <div
-                className="flex items-center gap-2 text-[11px] text-white/60 uppercase tracking-widest"
-                style={condensedLabel}
-              >
-                <span
-                  className="mta-bullet-sm"
-                  style={{ backgroundColor: "var(--mta-red)" }}
-                  aria-hidden="true"
-                >
-                  R
-                </span>
-                Rejected
-              </div>
-              <div className="text-2xl font-bold text-white mt-1" style={displayFont}>
-                {stats.rejected}
-              </div>
-            </div>
-            <div className="station-chrome rounded-lg p-4">
-              <div
-                className="flex items-center gap-2 text-[11px] text-white/60 uppercase tracking-widest"
-                style={condensedLabel}
-              >
-                <span
-                  className="mta-bullet-sm"
-                  style={{ backgroundColor: "var(--mta-orange)" }}
-                  aria-hidden="true"
-                >
-                  F
-                </span>
-                Flagged
-              </div>
-              <div className="text-2xl font-bold text-white mt-1" style={displayFont}>
-                {stats.flagged}
-              </div>
-            </div>
+            ))}
           </div>
         )}
 

@@ -2,10 +2,12 @@
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { NoteColor, InkColor, NOTE_COLORS, INK_COLORS } from "@/lib/types";
+import { getBase64ByteLength, MAX_IMAGE_BYTES } from "@/lib/validation";
 import { useModalDialog } from "./useModalDialog";
 
+// The creator is mounted fresh each time it opens (see page.tsx), so all
+// drawing state naturally resets when it closes.
 interface NoteCreatorProps {
-  isOpen: boolean;
   onClose: () => void;
   onPreparePlace: (imageData: string, color: NoteColor) => void;
   canPost: boolean;
@@ -31,16 +33,15 @@ const INK_COLOR_OPTIONS: InkColor[] = ["black", "blue", "red", "green", "purple"
 // Logical canvas size; the backing store is scaled by devicePixelRatio
 // (capped at 2) for crisp strokes and exports.
 const CANVAS_SIZE = 300;
-const MAX_EXPORT_BYTES = 480_000; // stay under the server's 500KB limit
+// Client-side export guard, derived from the server's validation limit with
+// headroom so a borderline image is never rejected server-side.
+const MAX_EXPORT_BYTES = MAX_IMAGE_BYTES - 20_000;
 
 function dataUrlByteLength(dataUrl: string): number {
-  const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
-  return Math.floor((base64.length * 3) / 4) - padding;
+  return getBase64ByteLength(dataUrl.slice(dataUrl.indexOf(",") + 1));
 }
 
 export default function NoteCreator({
-  isOpen,
   onClose,
   onPreparePlace,
   canPost,
@@ -52,7 +53,9 @@ export default function NoteCreator({
   // canvas is always background fill + this layer composited, so changing
   // the note color never destroys the drawing.
   const strokeCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const scaleRef = useRef(1);
+  // Frozen on first use: re-reading devicePixelRatio on later effect runs
+  // would resize (and thereby wipe) the stroke layer mid-drawing.
+  const scaleRef = useRef<number | null>(null);
 
   const [noteColor, setNoteColor] = useState<NoteColor>("yellow");
   const [inkColor, setInkColor] = useState<InkColor>("black");
@@ -64,7 +67,7 @@ export default function NoteCreator({
   const [hasDrawn, setHasDrawn] = useState(false);
   const [brushSize, setBrushSize] = useState(3);
 
-  const dialogRef = useModalDialog({ isOpen, onClose });
+  const dialogRef = useModalDialog({ isOpen: true, onClose });
 
   const repaintDisplay = useCallback(() => {
     const canvas = canvasRef.current;
@@ -82,17 +85,20 @@ export default function NoteCreator({
   // cleared when the modal transitions closed -> open, so switching between
   // Draw/Type or picking a different note color preserves the drawing.
   useEffect(() => {
-    if (!isOpen || inputMode !== "draw") return;
+    if (inputMode !== "draw") return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const scale = Math.min(window.devicePixelRatio || 1, 2);
-    const size = CANVAS_SIZE * scale;
-    scaleRef.current = scale;
+    if (scaleRef.current === null) {
+      scaleRef.current = Math.min(window.devicePixelRatio || 1, 2);
+    }
+    const size = CANVAS_SIZE * scaleRef.current;
 
-    canvas.width = size;
-    canvas.height = size;
+    if (canvas.width !== size || canvas.height !== size) {
+      canvas.width = size;
+      canvas.height = size;
+    }
 
     if (!strokeCanvasRef.current) {
       strokeCanvasRef.current = document.createElement("canvas");
@@ -104,7 +110,7 @@ export default function NoteCreator({
     }
 
     repaintDisplay();
-  }, [isOpen, inputMode, repaintDisplay]);
+  }, [inputMode, repaintDisplay]);
 
   const getPointerPosition = useCallback(
     (
@@ -141,7 +147,7 @@ export default function NoteCreator({
       const pos = getPointerPosition(e);
       if (!pos) return;
 
-      const lineWidth = brushSize * scaleRef.current;
+      const lineWidth = brushSize * (scaleRef.current ?? 1);
       strokeCtx.strokeStyle = INK_COLORS[inkColor];
       strokeCtx.fillStyle = INK_COLORS[inkColor];
       strokeCtx.lineWidth = lineWidth;
@@ -286,8 +292,6 @@ export default function NoteCreator({
 
   const isValid =
     inputMode === "draw" ? hasDrawn : text.trim().length > 0;
-
-  if (!isOpen) return null;
 
   return (
     <div

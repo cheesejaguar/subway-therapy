@@ -105,7 +105,7 @@ describe("GET /api/notes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe(
-      "public, s-maxage=30, stale-while-revalidate=300"
+      "public, s-maxage=30, stale-while-revalidate=120"
     );
   });
 

@@ -10,8 +10,17 @@ interface StickyNoteProps {
 
 // Notes the user has already seen this session. Panning unmounts and
 // remounts notes as they leave and re-enter the viewport; only genuinely
-// new notes should replay the "appear" animation.
+// new notes should replay the "appear" animation. Capped so a very long
+// session can't grow it without bound — clearing just replays an animation.
 const seenNoteIds = new Set<string>();
+const SEEN_NOTES_CAP = 20_000;
+
+function markNoteSeen(id: string): void {
+  if (seenNoteIds.size >= SEEN_NOTES_CAP) {
+    seenNoteIds.clear();
+  }
+  seenNoteIds.add(id);
+}
 
 function StickyNoteComponent({ note, onNoteClick }: StickyNoteProps) {
   const [imageError, setImageError] = React.useState(false);
@@ -19,7 +28,7 @@ function StickyNoteComponent({ note, onNoteClick }: StickyNoteProps) {
   const [isNew] = React.useState(() => !seenNoteIds.has(note.id));
 
   useEffect(() => {
-    seenNoteIds.add(note.id);
+    markNoteSeen(note.id);
   }, [note.id]);
 
   const bgColor = NOTE_COLORS[note.color] ?? NOTE_COLORS.yellow;

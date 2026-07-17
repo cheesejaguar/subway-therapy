@@ -37,6 +37,14 @@ export function tileToBounds(tile: number): ViewportBounds {
   };
 }
 
+// Tile responses can be served stale by the CDN (s-maxage plus
+// stale-while-revalidate on GET /api/notes). A response older than a fresh
+// note would wrongly report that note as absent, so notes younger than this
+// horizon are exempt from absence-pruning — this keeps the poster's
+// just-added note (and freshly approved notes) from vanishing until the CDN
+// revalidates.
+export const FRESH_NOTE_GRACE_MS = 6 * 60 * 1000;
+
 // Merge a tile response into the cache. Upserts every returned note, and
 // removes cached notes that are absent from the response and owned by this
 // tile. Ownership is the exact half-open interval [minX, maxX) — the server
@@ -47,7 +55,8 @@ export function tileToBounds(tile: number): ViewportBounds {
 export function mergeNotesIntoCache(
   cache: Map<string, PublicStickyNote>,
   notes: PublicStickyNote[],
-  tileBounds: ViewportBounds
+  tileBounds: ViewportBounds,
+  nowMs: number = Date.now()
 ): void {
   const returnedIds = new Set(notes.map((note) => note.id));
 
@@ -55,7 +64,8 @@ export function mergeNotesIntoCache(
     if (
       !returnedIds.has(id) &&
       note.x >= tileBounds.minX &&
-      note.x < tileBounds.maxX
+      note.x < tileBounds.maxX &&
+      nowMs - new Date(note.createdAt).getTime() > FRESH_NOTE_GRACE_MS
     ) {
       cache.delete(id);
     }
@@ -67,7 +77,9 @@ export function mergeNotesIntoCache(
 }
 
 // Bound the cache's memory: when it grows past maxSize, drop the notes
-// farthest (in x) from the viewer's current position.
+// farthest (in x) from the viewer's current position. Trims below the
+// trigger threshold (hysteresis) so the O(n log n) sort doesn't re-run on
+// every subsequent merge once the cap is reached.
 export function pruneCacheAround(
   cache: Map<string, PublicStickyNote>,
   centerX: number,
@@ -75,11 +87,12 @@ export function pruneCacheAround(
 ): void {
   if (cache.size <= maxSize) return;
 
+  const keep = Math.max(1, Math.floor(maxSize * 0.8));
   const byDistance = Array.from(cache.values()).sort(
     (a, b) => Math.abs(a.x - centerX) - Math.abs(b.x - centerX)
   );
 
-  for (const note of byDistance.slice(maxSize)) {
+  for (const note of byDistance.slice(keep)) {
     cache.delete(note.id);
   }
 }

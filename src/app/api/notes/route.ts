@@ -29,6 +29,7 @@ import {
   ConvexNote,
   mapConvexNote,
   toPublicStickyNote,
+  clampNoteToWall,
   WALL_CONFIG,
   getMaxOverlapWithNotes,
   MAX_OVERLAP_PERCENTAGE,
@@ -44,8 +45,9 @@ export const maxDuration = 60;
 // Public note reads are immutable-ish (they change only when moderation
 // approves or removes a note), so let the CDN absorb repeat viewport
 // fetches. The client requests tile-aligned integer bounds specifically so
-// these URLs repeat across users and pans.
-const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
+// these URLs repeat across users and pans. The SWR window bounds how long a
+// moderation takedown can stay visible on a CDN edge.
+const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=120";
 
 // Reject clearly oversized bodies before buffering/parsing them. The image
 // limit is 500KB decoded, ~667KB as base64, plus JSON envelope headroom.
@@ -87,6 +89,21 @@ function parseViewportBounds(request: NextRequest): {
   return { bounds: parsedBounds };
 }
 
+// Legacy notes created before coordinate validation can be stored outside
+// the wall. The Convex range query filters on STORED coordinates, so when a
+// requested region touches a wall edge, stretch that side far past the edge
+// — otherwise out-of-bounds strays would never be returned and their
+// clamp-on-read (clampNoteToWall) could never run.
+function widenEdgeBounds(bounds: ViewportBounds): ViewportBounds {
+  const overshoot = WALL_CONFIG.wallWidth;
+  return {
+    minX: bounds.minX <= 0 ? -overshoot : bounds.minX,
+    maxX: bounds.maxX >= WALL_CONFIG.wallWidth ? WALL_CONFIG.wallWidth + overshoot : bounds.maxX,
+    minY: bounds.minY <= 0 ? -overshoot : bounds.minY,
+    maxY: bounds.maxY >= WALL_CONFIG.wallHeight ? WALL_CONFIG.wallHeight + overshoot : bounds.maxY,
+  };
+}
+
 // Query approved notes in a bounds rectangle from Convex, preferring the
 // indexed range query and falling back to the legacy full-scan functions so
 // a deployment skew between Next and Convex never breaks reads.
@@ -116,7 +133,7 @@ async function queryConvexNotesInBounds(bounds: ViewportBounds): Promise<ConvexN
 export async function GET(request: NextRequest) {
   const { bounds, error } = parseViewportBounds(request);
   if (error) {
-    return NextResponse.json({ error }, { status: 400 });
+    return noStoreJson({ error }, 400);
   }
 
   try {
@@ -130,7 +147,9 @@ export async function GET(request: NextRequest) {
         minY: 0,
         maxY: WALL_CONFIG.wallHeight,
       };
-      const convexNotes = await queryConvexNotesInBounds(effectiveBounds);
+      const convexNotes = await queryConvexNotesInBounds(
+        widenEdgeBounds(effectiveBounds)
+      );
       notes = convexNotes.map(mapConvexNote);
     } else {
       // Fall back to in-memory storage for development
@@ -156,10 +175,7 @@ export async function GET(request: NextRequest) {
     );
   } catch (routeError) {
     console.error("Error fetching notes:", routeError);
-    return NextResponse.json(
-      { error: "Failed to fetch notes" },
-      { status: 500, headers: { "Cache-Control": "no-store" } }
-    );
+    return noStoreJson({ error: "Failed to fetch notes" }, 500);
   }
 }
 
@@ -245,9 +261,11 @@ export async function POST(request: NextRequest) {
       let nearbyNotes: Array<{ x: number; y: number }> | null = null;
 
       try {
+        // Clamp stored coordinates the same way rendering does, so overlap
+        // is validated against where notes are DISPLAYED.
         if (convexConfigured) {
           const convexNotes = await queryConvexNotesInBounds(checkBounds);
-          nearbyNotes = convexNotes.map((n) => ({ x: n.x, y: n.y }));
+          nearbyNotes = convexNotes.map((n) => clampNoteToWall({ x: n.x, y: n.y }));
         } else {
           const allNotes = await getAllNotesInMemory();
           nearbyNotes = allNotes
@@ -258,7 +276,7 @@ export async function POST(request: NextRequest) {
                 n.y >= checkBounds.minY &&
                 n.y <= checkBounds.maxY
             )
-            .map((n) => ({ x: n.x, y: n.y }));
+            .map((n) => clampNoteToWall({ x: n.x, y: n.y }));
         }
       } catch (overlapError) {
         console.error(
@@ -298,26 +316,32 @@ export async function POST(request: NextRequest) {
     // Generate note ID
     const noteId = crypto.randomUUID();
 
-    // Upload image to blob storage
-    try {
-      uploadedImageUrl = await uploadNoteImage(body.imageData, noteId);
-    } catch (uploadError) {
-      console.error("Failed to upload image:", uploadError);
-      await reservation.release();
-      return noStoreJson({ error: "Failed to upload image" }, 500);
-    }
-
-    if (!uploadedImageUrl) {
-      await reservation.release();
-      return noStoreJson({ error: "Failed to upload image" }, 500);
-    }
-
-    // Run AI moderation on the image
+    // Blob upload and AI moderation are independent (both read only the
+    // image data), so run them concurrently to cut post latency roughly in
+    // half. moderateImage never rejects — it degrades to a pending verdict.
     let moderationStatus: "pending" | "approved" | "rejected" = "pending";
     let moderationReason = "";
 
     try {
-      const moderation = await moderateImage(body.imageData);
+      const [uploadResult, moderation] = await Promise.all([
+        uploadNoteImage(body.imageData, noteId),
+        // moderateImage degrades internally, but guard anyway: a moderation
+        // failure must leave the note pending, never abort the post.
+        moderateImage(body.imageData).catch((moderationError) => {
+          console.error(
+            "AI moderation failed, defaulting to pending:",
+            moderationError
+          );
+          return {
+            approved: false,
+            reason: "",
+            confidence: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+          };
+        }),
+      ]);
+      uploadedImageUrl = uploadResult;
 
       // Auto-approve/reject with high confidence, otherwise leave pending for manual review
       const CONFIDENCE_THRESHOLD = 0.8;
@@ -334,8 +358,15 @@ export async function POST(request: NextRequest) {
         reason: moderation.reason,
         tokens: { input: moderation.inputTokens, output: moderation.outputTokens },
       });
-    } catch (moderationError) {
-      console.error("AI moderation failed, defaulting to pending:", moderationError);
+    } catch (uploadError) {
+      console.error("Failed to upload image:", uploadError);
+      await reservation.release();
+      return noStoreJson({ error: "Failed to upload image" }, 500);
+    }
+
+    if (!uploadedImageUrl) {
+      await reservation.release();
+      return noStoreJson({ error: "Failed to upload image" }, 500);
     }
 
     const rotation = Math.random() * 6 - 3;
@@ -406,24 +437,21 @@ export async function POST(request: NextRequest) {
     // Create response and set cookies on it. The full note payload lets the
     // client show the poster's own note immediately even though public GETs
     // are CDN-cached for a short window.
-    const response = NextResponse.json(
-      {
-        success: true,
-        note: {
-          id: noteId,
-          imageUrl: uploadedImageUrl,
-          color: body.color,
-          x: position.x,
-          y: position.y,
-          rotation,
-          createdAt,
-          moderationStatus,
-          flagCount: 0,
-        },
-        message,
+    const response = noStoreJson({
+      success: true,
+      note: {
+        id: noteId,
+        imageUrl: uploadedImageUrl,
+        color: body.color,
+        x: position.x,
+        y: position.y,
+        rotation,
+        createdAt,
+        moderationStatus,
+        flagCount: 0,
       },
-      { headers: { "Cache-Control": "no-store" } }
-    );
+      message,
+    });
 
     // Set session cookie on response
     const sessionCookie = getSessionCookieConfig(sessionId);

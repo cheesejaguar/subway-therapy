@@ -126,6 +126,28 @@ describe("noteCache", () => {
       expect(cache.has("on-max")).toBe(true);
       expect(cache.has("elsewhere")).toBe(true);
     });
+
+    it("does not prune recently created notes absent from a (possibly stale) response", () => {
+      const cache = new Map<string, PublicStickyNote>();
+      const tile = tileToBounds(2); // [4000, 6000)
+      const nowMs = 10_000_000;
+
+      // Posted 1 minute ago: a CDN-stale tile response predating the post
+      // must not delete it.
+      cache.set("fresh", {
+        ...makeNote("fresh", 5000),
+        createdAt: new Date(nowMs - 60_000).toISOString(),
+      });
+      // Posted long ago: absence is authoritative.
+      cache.set("old", {
+        ...makeNote("old", 5100),
+        createdAt: new Date(0).toISOString(),
+      });
+
+      mergeNotesIntoCache(cache, [], tile, nowMs);
+      expect(cache.has("fresh")).toBe(true);
+      expect(cache.has("old")).toBe(false);
+    });
   });
 
   describe("pruneCacheAround", () => {
@@ -136,7 +158,7 @@ describe("noteCache", () => {
       expect(cache.size).toBe(1);
     });
 
-    it("evicts the notes farthest from the center", () => {
+    it("evicts the notes farthest from the center, trimming below the cap", () => {
       const cache = new Map<string, PublicStickyNote>();
       for (let i = 0; i < 10; i++) {
         cache.set(`n${i}`, makeNote(`n${i}`, i * 1000));
@@ -144,9 +166,11 @@ describe("noteCache", () => {
 
       pruneCacheAround(cache, 0, 5);
 
-      expect(cache.size).toBe(5);
+      // Trims to 80% of the cap (hysteresis) so the sort doesn't re-run on
+      // every subsequent merge.
+      expect(cache.size).toBe(4);
       expect(cache.has("n0")).toBe(true);
-      expect(cache.has("n4")).toBe(true);
+      expect(cache.has("n3")).toBe(true);
       expect(cache.has("n9")).toBe(false);
     });
   });
