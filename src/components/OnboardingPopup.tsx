@@ -52,7 +52,9 @@ export default function OnboardingPopup({
         {/* Hero — MTA sign style header */}
         <div
           className="relative px-8 pt-8 pb-6 text-center overflow-hidden"
-          style={{ background: "linear-gradient(135deg, #1C1C1C 0%, #2A2A2A 100%)" }}
+          style={{
+            background: "linear-gradient(135deg, #1C1C1C 0%, #2A2A2A 100%)",
+          }}
         >
           {/* Decorative subway line stripe */}
           <div className="absolute top-0 left-0 right-0 h-1 flex">
@@ -116,7 +118,10 @@ export default function OnboardingPopup({
                 >
                   {step.title}
                 </h3>
-                <p className="text-white/50 text-xs mt-0.5" style={{ fontFamily: "var(--font-body)" }}>
+                <p
+                  className="text-white/50 text-xs mt-0.5"
+                  style={{ fontFamily: "var(--font-body)" }}
+                >
                   {step.description}
                 </p>
               </div>
@@ -124,8 +129,13 @@ export default function OnboardingPopup({
           ))}
 
           <div className="pt-3 border-t border-white/10">
-            <p className="text-white/30 text-[11px] text-center leading-relaxed" style={{ fontFamily: "var(--font-body)" }}>
-              No account needed. Notes are public. Do not include personal information. <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a>
+            <p
+              className="text-white/30 text-[11px] text-center leading-relaxed"
+              style={{ fontFamily: "var(--font-body)" }}
+            >
+              No account needed. Notes are public. Do not include personal
+              information. <a href="/privacy">Privacy</a> ·{" "}
+              <a href="/terms">Terms</a>
               <br />
               Notes are moderated to keep this space safe.
             </p>

@@ -27,7 +27,8 @@ export const metadata: Metadata = {
     default: "Subway Therapy",
     template: "%s | Subway Therapy",
   },
-  description: "Leave a note on the virtual subway wall. Draw or type your message on a sticky note and share your thoughts with the world, inspired by the NYC subway therapy movement.",
+  description:
+    "Leave a note on the virtual subway wall. Draw or type your message on a sticky note and share your thoughts with the world, inspired by the NYC subway therapy movement.",
   keywords: [
     "Subway Therapy",
     "subway therapy",
@@ -65,12 +66,14 @@ export const metadata: Metadata = {
     url: siteUrl,
     siteName: "Subway Therapy",
     title: "Subway Therapy",
-    description: "Leave a note on the virtual subway wall. Share your thoughts with the world.",
+    description:
+      "Leave a note on the virtual subway wall. Share your thoughts with the world.",
   },
   twitter: {
     card: "summary_large_image",
     title: "Subway Therapy",
-    description: "Leave a note on the virtual subway wall. Share your thoughts with the world.",
+    description:
+      "Leave a note on the virtual subway wall. Share your thoughts with the world.",
     creator: "@subwaytherapy",
   },
   alternates: {
@@ -92,7 +95,8 @@ const jsonLd = {
   "@context": "https://schema.org",
   "@type": "WebApplication",
   name: "Subway Therapy",
-  description: "Leave a note on the virtual subway wall. Draw or type your message on a sticky note and share your thoughts with the world.",
+  description:
+    "Leave a note on the virtual subway wall. Draw or type your message on a sticky note and share your thoughts with the world.",
   url: siteUrl,
   applicationCategory: "SocialApplication",
   operatingSystem: "Any",
@@ -114,7 +118,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${barlowBody.variable} ${barlowDisplay.variable}`}>
+    <html
+      lang="en"
+      className={`${barlowBody.variable} ${barlowDisplay.variable}`}
+    >
       <head>
         <script
           type="application/ld+json"
@@ -123,7 +130,15 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         {children}
-        <nav aria-label="Site information" className="relative z-50 flex flex-wrap justify-center gap-4 bg-white p-3 text-black"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/delete">Data deletion</a><a href="/cookies">Cookies</a></nav>
+        <nav
+          aria-label="Site information"
+          className="relative z-50 flex flex-wrap justify-center gap-4 bg-white p-3 text-black"
+        >
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+          <a href="/delete">Data deletion</a>
+          <a href="/cookies">Cookies</a>
+        </nav>
       </body>
     </html>
   );
