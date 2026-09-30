@@ -125,7 +125,7 @@ export default function OnboardingPopup({
 
           <div className="pt-3 border-t border-white/10">
             <p className="text-white/30 text-[11px] text-center leading-relaxed" style={{ fontFamily: "var(--font-body)" }}>
-              No account needed. Your privacy is protected.
+              No account needed. Notes are public. Do not include personal information. <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a>
               <br />
               Notes are moderated to keep this space safe.
             </p>

@@ -123,6 +123,7 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         {children}
+        <nav aria-label="Site information" className="relative z-50 flex flex-wrap justify-center gap-4 bg-white p-3 text-black"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/delete">Data deletion</a><a href="/cookies">Cookies</a></nav>
       </body>
     </html>
   );
