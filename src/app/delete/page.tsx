@@ -1,3 +1,4 @@
+import Link from "next/link";
 export const metadata = { title: "Subway Therapy data deletion" };
 export default function Page() {
   return (
@@ -5,7 +6,7 @@ export default function Page() {
       className="mx-auto max-w-3xl p-6 leading-7"
       style={{ maxHeight: "100dvh", overflowY: "auto" }}
     >
-      <a href="/">Home</a>
+      <Link href="/">Home</Link>
       <h1 className="text-3xl font-bold my-6">Subway Therapy data deletion</h1>
       <section className="my-6">
         <h2 className="text-xl font-semibold">Local data</h2>
@@ -25,10 +26,10 @@ export default function Page() {
         </p>
       </section>
       <nav aria-label="Site information" className="flex flex-wrap gap-4">
-        <a href="/privacy">Privacy</a>
-        <a href="/terms">Terms</a>
-        <a href="/cookies">Cookies</a>
-        <a href="/delete">Data deletion</a>
+        <Link href="/privacy">Privacy</Link>
+        <Link href="/terms">Terms</Link>
+        <Link href="/cookies">Cookies</Link>
+        <Link href="/delete">Data deletion</Link>
       </nav>
     </article>
   );

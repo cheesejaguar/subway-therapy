@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import React from "react";
 import { useModalDialog } from "./useModalDialog";
 
@@ -134,8 +136,8 @@ export default function OnboardingPopup({
               style={{ fontFamily: "var(--font-body)" }}
             >
               No account needed. Notes are public. Do not include personal
-              information. <a href="/privacy">Privacy</a> ·{" "}
-              <a href="/terms">Terms</a>
+              information. <Link href="/privacy">Privacy</Link> ·{" "}
+              <Link href="/terms">Terms</Link>
               <br />
               Notes are moderated to keep this space safe.
             </p>

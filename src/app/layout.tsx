@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { Metadata, Viewport } from "next";
 import { Barlow, Barlow_Condensed } from "next/font/google";
 import "./globals.css";
@@ -134,10 +135,10 @@ export default function RootLayout({
           aria-label="Site information"
           className="relative z-50 flex flex-wrap justify-center gap-4 bg-white p-3 text-black"
         >
-          <a href="/privacy">Privacy</a>
-          <a href="/terms">Terms</a>
-          <a href="/delete">Data deletion</a>
-          <a href="/cookies">Cookies</a>
+          <Link href="/privacy">Privacy</Link>
+          <Link href="/terms">Terms</Link>
+          <Link href="/delete">Data deletion</Link>
+          <Link href="/cookies">Cookies</Link>
         </nav>
       </body>
     </html>
