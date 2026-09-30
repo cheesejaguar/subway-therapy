@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import Wall from "@/components/Wall";
 import NoteCreator from "@/components/NoteCreator";
@@ -30,7 +32,6 @@ interface Toast {
   text: string;
 }
 
-
 // Shared MTA-style status banner shell used by the toast and the fetch-error
 // banner (same chrome, position, and animation).
 function StatusBanner({
@@ -43,7 +44,10 @@ function StatusBanner({
   return (
     <div
       className="fixed top-4 left-1/2 station-chrome rounded-lg px-5 py-3 z-40 flex items-center gap-3"
-      style={{ animation: "slideDown 0.3s ease", transform: "translate(-50%, 0)" }}
+      style={{
+        animation: "slideDown 0.3s ease",
+        transform: "translate(-50%, 0)",
+      }}
       role={role}
       aria-live={role === "status" ? "polite" : undefined}
     >
@@ -65,7 +69,9 @@ export default function Home() {
   const [cantPostReason, setCantPostReason] = useState<string>();
   const [timeUntilNextPost, setTimeUntilNextPost] = useState<string>();
   const [toast, setToast] = useState<Toast | null>(null);
-  const [selectedNote, setSelectedNote] = useState<PublicStickyNote | null>(null);
+  const [selectedNote, setSelectedNote] = useState<PublicStickyNote | null>(
+    null,
+  );
   const [pendingNote, setPendingNote] = useState<PendingNote | null>(null);
   const [isPlacingNote, setIsPlacingNote] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -134,8 +140,8 @@ export default function Home() {
     if (!bounds) return;
     setViewportReady(
       tileRangeForBounds(bounds).every((tile) =>
-        tileFetchedAtRef.current.has(tile)
-      )
+        tileFetchedAtRef.current.has(tile),
+      ),
     );
   }, []);
 
@@ -144,7 +150,8 @@ export default function Home() {
       if (inflightRef.current.has(tile)) return;
 
       const fetchedAt = tileFetchedAtRef.current.get(tile);
-      if (fetchedAt !== undefined && Date.now() - fetchedAt < TILE_TTL_MS) return;
+      if (fetchedAt !== undefined && Date.now() - fetchedAt < TILE_TTL_MS)
+        return;
 
       const tileBounds = tileToBounds(tile);
       // Integer, tile-aligned params: the same URLs repeat across pans and
@@ -175,7 +182,8 @@ export default function Home() {
         publishCache(viewportCenterX);
         recomputeViewportReady();
       } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (error instanceof DOMException && error.name === "AbortError")
+          return;
         console.error("Error fetching notes:", error);
         setIsLoading(false);
         setFetchError(true);
@@ -183,7 +191,7 @@ export default function Home() {
         inflightRef.current.delete(tile);
       }
     },
-    [publishCache, recomputeViewportReady]
+    [publishCache, recomputeViewportReady],
   );
 
   const handleViewportChange = useCallback(
@@ -195,7 +203,7 @@ export default function Home() {
       }
       recomputeViewportReady();
     },
-    [fetchTile, recomputeViewportReady]
+    [fetchTile, recomputeViewportReady],
   );
 
   const handleRetryFetch = useCallback(() => {
@@ -232,18 +240,23 @@ export default function Home() {
         console.error("Error flagging note:", error);
         showToast(
           "error",
-          error instanceof Error ? error.message : "Failed to report note. Please try again."
+          error instanceof Error
+            ? error.message
+            : "Failed to report note. Please try again.",
         );
       }
     },
-    [showToast]
+    [showToast],
   );
 
-  const handlePreparePlace = useCallback((imageData: string, color: NoteColor) => {
-    setPendingNote({ imageData, color });
-    setShowCreator(false);
-    setIsPlacingNote(true);
-  }, []);
+  const handlePreparePlace = useCallback(
+    (imageData: string, color: NoteColor) => {
+      setPendingNote({ imageData, color });
+      setShowCreator(false);
+      setIsPlacingNote(true);
+    },
+    [],
+  );
 
   const handleCancelPlacement = useCallback(() => {
     setPendingNote(null);
@@ -282,7 +295,10 @@ export default function Home() {
         // Public GETs are CDN-cached for a short window, so insert the
         // poster's own note directly — it appears instantly for them.
         if (data.note?.moderationStatus === "approved" && data.note.imageUrl) {
-          notesCacheRef.current.set(data.note.id, data.note as PublicStickyNote);
+          notesCacheRef.current.set(
+            data.note.id,
+            data.note as PublicStickyNote,
+          );
           setNotes(Array.from(notesCacheRef.current.values()));
         }
 
@@ -291,14 +307,14 @@ export default function Home() {
         console.error("Error submitting note:", error);
         showToast(
           "error",
-          error instanceof Error ? error.message : "Failed to submit note"
+          error instanceof Error ? error.message : "Failed to submit note",
         );
       } finally {
         submittingRef.current = false;
         setIsSubmitting(false);
       }
     },
-    [pendingNote, showToast]
+    [pendingNote, showToast],
   );
 
   const handleCloseOnboarding = useCallback(() => {
@@ -315,6 +331,13 @@ export default function Home() {
       >
         Skip to main content
       </a>
+
+      <Link
+        href="/privacy"
+        className="fixed top-4 right-4 z-40 rounded bg-black px-3 py-3 text-sm text-white"
+      >
+        Privacy
+      </Link>
 
       {/* Main wall */}
       <Wall
@@ -353,13 +376,20 @@ export default function Home() {
             className="w-3 h-3 rounded-full flex-shrink-0"
             style={{ backgroundColor: "var(--mta-red)" }}
           />
-          <span className="text-white/90 text-sm" style={{ fontFamily: "var(--font-body)" }}>
+          <span
+            className="text-white/90 text-sm"
+            style={{ fontFamily: "var(--font-body)" }}
+          >
             Could not load notes.
           </span>
           <button
             onClick={handleRetryFetch}
             className="px-3 py-1 text-xs text-white hover:bg-white/10 rounded transition-colors tracking-wider uppercase"
-            style={{ fontFamily: "var(--font-display)", fontWeight: 600, backgroundColor: "var(--mta-red)" }}
+            style={{
+              fontFamily: "var(--font-display)",
+              fontWeight: 600,
+              backgroundColor: "var(--mta-red)",
+            }}
           >
             Retry
           </button>
@@ -369,9 +399,15 @@ export default function Home() {
       {/* Submitting overlay */}
       {isSubmitting && (
         <div className="fixed inset-0 modal-overlay flex items-center justify-center z-50">
-          <div className="station-chrome rounded-lg px-6 py-4 flex items-center gap-3" style={{ animation: "fadeIn 0.2s ease" }}>
+          <div
+            className="station-chrome rounded-lg px-6 py-4 flex items-center gap-3"
+            style={{ animation: "fadeIn 0.2s ease" }}
+          >
             <div className="w-5 h-5 border-2 border-[var(--mta-green)] border-t-transparent rounded-full animate-spin" />
-            <span className="text-white/90" style={{ fontFamily: "var(--font-display)", fontWeight: 500 }}>
+            <span
+              className="text-white/90"
+              style={{ fontFamily: "var(--font-display)", fontWeight: 500 }}
+            >
               POSTING YOUR NOTE...
             </span>
           </div>
@@ -387,12 +423,17 @@ export default function Home() {
               width: 20,
               height: 20,
               backgroundColor:
-                toast.kind === "success" ? "var(--mta-green)" : "var(--mta-red)",
+                toast.kind === "success"
+                  ? "var(--mta-green)"
+                  : "var(--mta-red)",
             }}
           >
             {toast.kind === "success" ? "✓" : "!"}
           </div>
-          <span className="text-white/90 text-sm" style={{ fontFamily: "var(--font-body)" }}>
+          <span
+            className="text-white/90 text-sm"
+            style={{ fontFamily: "var(--font-body)" }}
+          >
             {toast.text}
           </span>
         </StatusBanner>
