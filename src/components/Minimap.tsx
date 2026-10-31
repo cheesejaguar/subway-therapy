@@ -78,20 +78,19 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
   }, []);
 
   const startDrag = useCallback(
-    (clientX: number) => {
-      if (isDraggingRef.current) {
-        navigateToPosition(clientX);
-        return;
-      }
+    (clientX: number, pointerId?: number) => {
+      if (isDraggingRef.current) return;
 
       isDraggingRef.current = true;
       setIsDragging(true);
+      sliderRef.current?.focus({ preventScroll: true });
       navigateToPosition(clientX);
 
       // Document capture listeners run before the Wall's gesture handler and
       // before the minimap's own capture guard, so dragging works even while
       // the pointer stays over the map.
       const handlePointerMove = (e: PointerEvent) => {
+        if (e.pointerId !== pointerId) return;
         e.preventDefault();
         e.stopPropagation();
         navigateToPosition(e.clientX);
@@ -115,6 +114,10 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
       };
 
       const handleEnd = (e: Event) => {
+        // Compatibility mouse/touch events and other fingers must not end
+        // the pointer gesture that owns this drag.
+        if (pointerId !== undefined &&
+            (!(e instanceof PointerEvent) || e.pointerId !== pointerId)) return;
         e.stopPropagation();
         endDrag();
       };
@@ -136,6 +139,7 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
       });
       document.addEventListener("touchend", handleEnd, true);
       document.addEventListener("touchcancel", handleEnd, true);
+      window.addEventListener("blur", endDrag);
 
       dragCleanupRef.current = () => {
         document.removeEventListener("pointermove", handlePointerMove, true);
@@ -146,6 +150,7 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
         document.removeEventListener("touchmove", handleTouchMove, true);
         document.removeEventListener("touchend", handleEnd, true);
         document.removeEventListener("touchcancel", handleEnd, true);
+        window.removeEventListener("blur", endDrag);
       };
     },
     [endDrag, navigateToPosition]
@@ -171,14 +176,14 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
       e.stopPropagation();
       if (e.button !== 0 || !isSliderTarget(e.target)) return;
       e.preventDefault();
-      startDrag(e.clientX);
+      startDrag(e.clientX, e.pointerId);
     };
 
     const handleMouseDown = (e: MouseEvent) => {
       e.stopPropagation();
       if (e.button !== 0 || !isSliderTarget(e.target)) return;
-      // A pointerdown already started the gesture in modern browsers.
-      if (isDraggingRef.current) return;
+      // Compatibility events must not start a second gesture.
+      if ("PointerEvent" in window) return;
       e.preventDefault();
       startDrag(e.clientX);
     };
@@ -186,8 +191,7 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
     const handleTouchStart = (e: TouchEvent) => {
       e.stopPropagation();
       if (!isSliderTarget(e.target) || e.touches.length !== 1) return;
-      // A pointerdown already started the gesture in modern browsers.
-      if (isDraggingRef.current) return;
+      if ("PointerEvent" in window) return;
       e.preventDefault();
       startDrag(e.touches[0].clientX);
     };
@@ -230,7 +234,7 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
   const currentFeet = Math.round(viewportCenterX / (wallWidth / 1000));
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
+    (e: KeyboardEvent) => {
       const step = e.shiftKey ? 20000 : 5000;
       let targetX: number | null = null;
 
@@ -252,10 +256,20 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
       }
 
       e.preventDefault();
+      e.stopPropagation();
       onNavigate(targetX, wallHeight / 2);
     },
     [viewportCenterX, wallWidth, wallHeight, onNavigate]
   );
+
+  // Stop handled keys before they reach the wall's native gesture listeners
+  // or React's delegated keyboard handler. Leave Tab free to move focus.
+  React.useEffect(() => {
+    const slider = sliderRef.current;
+    if (!slider) return;
+    slider.addEventListener("keydown", handleKeyDown, true);
+    return () => slider.removeEventListener("keydown", handleKeyDown, true);
+  }, [handleKeyDown]);
 
   return (
     <div ref={containerRef} className="absolute top-4 left-4 station-chrome rounded-lg p-3 z-20" style={{ minWidth: sliderWidth + 24 }}>
@@ -298,7 +312,6 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
           isDragging ? "cursor-grabbing" : "cursor-grab"
         }`}
         style={{ width: sliderWidth, height: sliderHeight, touchAction: "none" }}
-        onKeyDown={handleKeyDown}
         tabIndex={0}
         role="slider"
         aria-label="Wall position, in feet from the left end"

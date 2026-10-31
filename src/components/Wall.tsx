@@ -384,7 +384,9 @@ export default function Wall({
       eventOptions: { passive: false },
       drag: {
         filterTaps: true,
-        pointer: { touch: true },
+        // handleKeyDown owns keyboard panning; gesture key handling would
+        // apply a second, conflicting movement on the same arrow press.
+        pointer: { touch: true, keys: false },
         preventDefault: true,
       },
       pinch: {
