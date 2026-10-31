@@ -1,7 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
-import { StickyNote, ModerationStatus, NOTE_COLORS } from "@/lib/types";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import {
+  AdminStickyNote,
+  ModerationStatus,
+  NOTE_COLORS,
+  getNoteKind,
+  getNoteText,
+} from "@/lib/types";
 
 interface Stats {
   total: number;
@@ -53,9 +59,10 @@ const STAT_TILES: Array<{
 ];
 
 export default function AdminDashboard() {
-  const [notes, setNotes] = useState<StickyNote[]>([]);
+  const [notes, setNotes] = useState<AdminStickyNote[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [filter, setFilter] = useState<FilterStatus>("pending");
+  const [search, setSearch] = useState("");
   const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -259,13 +266,94 @@ export default function AdminDashboard() {
     });
   };
 
+  const filteredNotes = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return notes;
+
+    return notes.filter((note) =>
+      [
+        note.id,
+        note.text,
+        note.altText,
+        note.caption,
+        note.color,
+        note.moderationStatus,
+        ...(note.reportReasons ?? []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(needle)
+    );
+  }, [notes, search]);
+
   const toggleSelectAll = () => {
-    if (selectedNotes.size === notes.length) {
+    const allSelected =
+      filteredNotes.length > 0 &&
+      filteredNotes.every((note) => selectedNotes.has(note.id));
+
+    if (allSelected) {
       setSelectedNotes(new Set());
     } else {
-      setSelectedNotes(new Set(notes.map((n) => n.id)));
+      setSelectedNotes(new Set(filteredNotes.map((note) => note.id)));
     }
   };
+
+  const exportCsv = useCallback(() => {
+    const escapeCell = (value: unknown) =>
+      `"${String(value ?? "").replace(/"/g, '""')}"`;
+
+    const header = [
+      "id",
+      "createdAt",
+      "status",
+      "color",
+      "kind",
+      "text",
+      "altText",
+      "caption",
+      "flagCount",
+      "reportReasons",
+      "x",
+      "y",
+      "imageUrl",
+    ];
+
+    const rows = filteredNotes.map((note) => [
+      note.id,
+      note.createdAt,
+      note.moderationStatus,
+      note.color,
+      getNoteKind(note),
+      getNoteText(note),
+      note.altText ?? "",
+      note.caption ?? "",
+      note.flagCount,
+      (note.reportReasons ?? []).join(" | "),
+      note.x,
+      note.y,
+      note.imageUrl,
+    ]);
+
+    const csv = [header, ...rows]
+      .map((row) => row.map(escapeCell).join(","))
+      .join("\r\n");
+
+    // The BOM keeps Excel from misreading the UTF-8 note text.
+    const blob = new Blob([`\uFEFF${csv}`], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `subway-therapy-moderation-${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [filteredNotes]);
 
   // Login screen
   if (!isAuthenticated) {
@@ -390,6 +478,32 @@ export default function AdminDashboard() {
             </nav>
           </div>
 
+          {/* Search and export */}
+          <div className="px-3 pb-3 flex flex-col sm:flex-row sm:items-center gap-2">
+            <label htmlFor="admin-search" className="sr-only">
+              Search notes
+            </label>
+            <input
+              id="admin-search"
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search note text, report reason, or ID…"
+              className="flex-1 rounded-lg bg-white/[0.05] border border-white/10 px-3 py-2 text-sm text-white/85 placeholder:text-white/25 focus:outline-none focus:ring-2 focus:ring-[var(--mta-green)]"
+            />
+            <span className="text-[11px] text-white/35 whitespace-nowrap">
+              {filteredNotes.length} of {notes.length}
+            </span>
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={filteredNotes.length === 0}
+              className="px-4 py-2 rounded-lg border border-white/10 bg-white/[0.06] text-white/70 hover:text-white text-xs mta-button touch-target disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Export CSV
+            </button>
+          </div>
+
           {/* Batch actions */}
           {selectedNotes.size > 0 && (
             <div className="px-4 py-3 border-t border-white/10 flex items-center gap-3 flex-wrap">
@@ -430,23 +544,27 @@ export default function AdminDashboard() {
           <div className="flex items-center justify-center py-12">
             <div className="w-8 h-8 border-4 border-[var(--mta-green)] border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : notes.length === 0 ? (
+        ) : filteredNotes.length === 0 ? (
           <div
             className="text-center py-12 text-white/60 text-sm uppercase tracking-widest"
             style={condensedLabel}
           >
-            No notes to display
+            {notes.length === 0 ? "No notes to display" : "No notes match your search"}
           </div>
         ) : (
-          <div className="station-chrome rounded-lg overflow-hidden">
-            <table className="min-w-full divide-y divide-white/10">
+          <div className="station-chrome rounded-lg overflow-x-auto">
+            <table className="min-w-[760px] w-full divide-y divide-white/10">
               <thead className="bg-white/5">
                 <tr>
                   <th className="px-4 py-3 text-left">
                     <input
                       type="checkbox"
-                      checked={selectedNotes.size === notes.length}
+                      checked={
+                        filteredNotes.length > 0 &&
+                        filteredNotes.every((note) => selectedNotes.has(note.id))
+                      }
                       onChange={toggleSelectAll}
+                      aria-label="Select all visible notes"
                       className="rounded accent-[var(--mta-green)]"
                     />
                   </th>
@@ -471,7 +589,7 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {notes.map((note) => (
+                {filteredNotes.map((note) => (
                   <tr
                     key={note.id}
                     className={
@@ -490,17 +608,26 @@ export default function AdminDashboard() {
                     </td>
                     <td className="px-4 py-3">
                       <div
-                        className="w-16 h-16 rounded shadow-lg overflow-hidden border border-white/10"
+                        className="w-40 h-24 rounded shadow-lg overflow-hidden border border-white/10 flex items-center justify-center p-2"
                         style={{ backgroundColor: NOTE_COLORS[note.color] }}
                       >
-                        {note.imageUrl && (
+                        {getNoteKind(note) === "text" && getNoteText(note) ? (
+                          <p className="w-full text-[10px] leading-tight text-black/80 line-clamp-[5] break-words">
+                            {getNoteText(note)}
+                          </p>
+                        ) : note.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element -- Blob URLs are served directly.
                           <img
-                            src={note.imageUrl}
+                            src={note.thumbUrl || note.imageUrl}
                             alt="Note preview"
                             loading="lazy"
                             decoding="async"
                             className="w-full h-full object-contain"
                           />
+                        ) : (
+                          <span className="text-[10px] italic text-black/40">
+                            No preview
+                          </span>
                         )}
                       </div>
                     </td>
@@ -530,11 +657,25 @@ export default function AdminDashboard() {
                         {note.moderationStatus}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-sm text-white/40">
+                    <td className="px-4 py-3 text-sm text-white/40 align-top">
                       {note.flagCount > 0 ? (
-                        <span className="text-[var(--mta-orange)] font-semibold">
-                          {note.flagCount}
-                        </span>
+                        <div className="max-w-[190px]">
+                          <span className="text-[var(--mta-orange)] font-semibold">
+                            {note.flagCount}
+                          </span>
+                          {note.reportReasons.length > 0 && (
+                            <ul className="mt-1 space-y-0.5">
+                              {note.reportReasons.map((reason) => (
+                                <li
+                                  key={reason}
+                                  className="text-[10px] leading-snug text-white/45"
+                                >
+                                  • {reason}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
                       ) : (
                         "-"
                       )}

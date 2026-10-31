@@ -9,6 +9,7 @@ import type { StickyNote } from "@/lib/types";
 vi.mock("@/lib/storage", () => ({
   getNotesForModeration: vi.fn(),
   getStats: vi.fn(),
+  getFlagReasons: vi.fn(),
 }));
 
 vi.mock("@/lib/convex", () => ({
@@ -86,7 +87,9 @@ describe("GET /api/admin/notes", () => {
     }>(response);
 
     expect(response.status).toBe(200);
-    expect(data.notes).toEqual(mockNotes);
+    expect(data.notes).toEqual(
+      mockNotes.map((note) => ({ ...note, reportReasons: [] }))
+    );
     expect(data.stats).toEqual(mockStats);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
@@ -141,6 +144,95 @@ describe("GET /api/admin/notes", () => {
 
     await GET(request);
     expect(storage.getNotesForModeration).toHaveBeenCalledWith("pending");
+  });
+
+  it("should attach deduplicated report reasons to flagged notes", async () => {
+    vi.mocked(storage.getNotesForModeration).mockResolvedValue([
+      {
+        id: "flagged-note",
+        imageUrl: "https://example.com/flagged.png",
+        color: "yellow",
+        x: 100,
+        y: 200,
+        rotation: 0,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        moderationStatus: "flagged",
+        flagCount: 3,
+      },
+      {
+        id: "clean-note",
+        imageUrl: "https://example.com/clean.png",
+        color: "blue",
+        x: 400,
+        y: 200,
+        rotation: 0,
+        createdAt: "2024-01-02T00:00:00.000Z",
+        moderationStatus: "approved",
+        flagCount: 0,
+      },
+    ]);
+    vi.mocked(storage.getStats).mockResolvedValue({
+      total: 2,
+      pending: 0,
+      approved: 1,
+      rejected: 0,
+      flagged: 1,
+    });
+    vi.mocked(storage.getFlagReasons).mockResolvedValue([
+      "Harassment or bullying",
+      "Harassment or bullying",
+      "Spam or advertising",
+    ]);
+
+    const request = createMockRequest("http://localhost:3000/api/admin/notes");
+    const response = await GET(request);
+    const data = await parseResponse<{
+      notes: Array<{ id: string; reportReasons: string[] }>;
+    }>(response);
+
+    expect(response.status).toBe(200);
+    expect(data.notes[0].reportReasons).toEqual([
+      "Harassment or bullying",
+      "Spam or advertising",
+    ]);
+    expect(data.notes[1].reportReasons).toEqual([]);
+    expect(storage.getFlagReasons).toHaveBeenCalledTimes(1);
+    expect(storage.getFlagReasons).toHaveBeenCalledWith("flagged-note");
+  });
+
+  it("should still return notes when report reasons cannot be loaded", async () => {
+    vi.mocked(storage.getNotesForModeration).mockResolvedValue([
+      {
+        id: "flagged-note",
+        imageUrl: "https://example.com/flagged.png",
+        color: "yellow",
+        x: 100,
+        y: 200,
+        rotation: 0,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        moderationStatus: "flagged",
+        flagCount: 2,
+      },
+    ]);
+    vi.mocked(storage.getStats).mockResolvedValue({
+      total: 1,
+      pending: 0,
+      approved: 0,
+      rejected: 0,
+      flagged: 1,
+    });
+    vi.mocked(storage.getFlagReasons).mockRejectedValue(
+      new Error("flag lookup failed")
+    );
+
+    const request = createMockRequest("http://localhost:3000/api/admin/notes");
+    const response = await GET(request);
+    const data = await parseResponse<{
+      notes: Array<{ id: string; reportReasons: string[] }>;
+    }>(response);
+
+    expect(response.status).toBe(200);
+    expect(data.notes[0].reportReasons).toEqual([]);
   });
 
   it("should return 400 for invalid status", async () => {

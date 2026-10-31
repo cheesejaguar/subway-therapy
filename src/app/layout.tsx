@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Barlow, Barlow_Condensed } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 
 // Self-hosted via next/font: no external font requests, no CSP exceptions,
@@ -71,10 +73,6 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Subway Therapy",
     description: "Leave a note on the virtual subway wall. Share your thoughts with the world.",
-    creator: "@subwaytherapy",
-  },
-  alternates: {
-    canonical: siteUrl,
   },
 };
 
@@ -85,6 +83,7 @@ export const viewport: Viewport = {
   userScalable: true,
   viewportFit: "cover",
   themeColor: "#1C1C1C",
+  colorScheme: "dark",
 };
 
 // JSON-LD structured data for SEO
@@ -101,10 +100,16 @@ const jsonLd = {
     price: "0",
     priceCurrency: "USD",
   },
+  isAccessibleForFree: true,
   creator: {
     "@type": "Organization",
     name: "Subway Therapy",
     url: siteUrl,
+    founder: {
+      "@type": "Person",
+      name: "Matthew Chavez",
+      alternateName: "Levee",
+    },
   },
 };
 
@@ -123,6 +128,8 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         {children}
+        <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );

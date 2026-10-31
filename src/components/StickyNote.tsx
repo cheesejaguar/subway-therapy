@@ -1,7 +1,15 @@
 "use client";
 
 import React, { useEffect } from "react";
-import { StickyNote, NOTE_COLORS } from "@/lib/types";
+import {
+  StickyNote,
+  NOTE_COLORS,
+  getNoteAltText,
+  getNoteKind,
+  getNoteText,
+  getReactionTotal,
+} from "@/lib/types";
+import NoteText from "./NoteText";
 
 interface StickyNoteProps {
   note: StickyNote;
@@ -33,6 +41,13 @@ function StickyNoteComponent({ note, onNoteClick }: StickyNoteProps) {
 
   const bgColor = NOTE_COLORS[note.color] ?? NOTE_COLORS.yellow;
   const rotation = note.rotation || 0;
+  const isText = getNoteKind(note) === "text" && getNoteText(note).length > 0;
+  const text = getNoteText(note);
+  const reactionTotal = getReactionTotal(note);
+  const isPending = note.moderationStatus === "pending";
+  const altText = getNoteAltText(note);
+  const imageAlt =
+    note.altText?.trim() || note.caption?.trim() || "User created note content";
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -45,6 +60,8 @@ function StickyNoteComponent({ note, onNoteClick }: StickyNoteProps) {
       onNoteClick?.(note);
     }
   };
+
+  const dateLabel = new Date(note.createdAt).toLocaleDateString();
 
   return (
     <div
@@ -60,11 +77,31 @@ function StickyNoteComponent({ note, onNoteClick }: StickyNoteProps) {
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="button"
-      aria-label={`Sticky note posted ${new Date(note.createdAt).toLocaleDateString()}. Press Enter to view.`}
+      aria-label={
+        isText
+          ? `Sticky note posted ${dateLabel}: ${text.slice(0, 180)}. Press Enter to view.`
+          : `Sticky note posted ${dateLabel}. ${altText} Press Enter to view.`
+      }
     >
       {/* Note content */}
       <div className="w-full h-full overflow-hidden relative">
-        {note.moderationStatus === "pending" ? (
+        {isText ? (
+          <div className="w-full h-full flex items-center justify-center p-1">
+            <NoteText text={text} size="wall" className="line-clamp-[9]" />
+          </div>
+        ) : note.imageUrl && !imageError ? (
+          // eslint-disable-next-line @next/next/no-img-element -- Blob URLs are served directly.
+          <img
+            src={note.thumbUrl || note.imageUrl}
+            alt={imageAlt}
+            className="w-full h-full object-contain"
+            width={130}
+            height={130}
+            loading="lazy"
+            decoding="async"
+            onError={() => setImageError(true)}
+          />
+        ) : isPending ? (
           <div className="w-full h-full flex items-center justify-center p-4">
             <span
               className="text-gray-600 text-xs text-center italic"
@@ -73,23 +110,33 @@ function StickyNoteComponent({ note, onNoteClick }: StickyNoteProps) {
               Pending moderation...
             </span>
           </div>
-        ) : note.imageUrl && !imageError ? (
-          <img
-            src={note.imageUrl}
-            alt="User created note content"
-            className="w-full h-full object-contain"
-            width={130}
-            height={130}
-            loading="lazy"
-            decoding="async"
-            onError={() => setImageError(true)}
-          />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-gray-500 text-sm italic">
             {imageError ? "Image failed to load" : ""}
           </div>
         )}
       </div>
+
+      {/* Pending badge for the poster's own just-submitted note */}
+      {isPending && (
+        <div
+          className="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider text-black"
+          style={{ backgroundColor: "var(--mta-yellow)", fontFamily: "var(--font-display)" }}
+        >
+          Pending
+        </div>
+      )}
+
+      {/* Reaction count — quiet, secondary */}
+      {reactionTotal > 0 && (
+        <div
+          className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold text-white"
+          style={{ backgroundColor: "rgba(28,28,28,0.72)" }}
+          aria-hidden="true"
+        >
+          ♥ {reactionTotal}
+        </div>
+      )}
 
       {/* Flagged indicator — MTA warning style */}
       {note.flagCount > 0 && (

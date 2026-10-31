@@ -1,10 +1,45 @@
-import { StickyNote, ModerationStatus, ViewportBounds, WALL_CONFIG } from "./types";
+import {
+  StickyNote,
+  ModerationStatus,
+  ViewportBounds,
+  WALL_CONFIG,
+  ReactionKind,
+  getReactionCounts,
+} from "./types";
 import { deleteNoteImage } from "./blob";
 
 // In-memory storage for development (replace with database in production)
-// This simulates what would be stored in Vercel Edge Config / KV
-const notesStore: Map<string, StickyNote> = new Map();
-const noteFlaggers: Map<string, Set<string>> = new Map();
+// This simulates what would be stored in Vercel Edge Config / KV.
+//
+// Next bundles route handlers and server components separately, so a plain
+// module-level Map would give each bundle its own copy: a note created through
+// /api/notes would be invisible to /note/[id] and /gallery. Keeping the store
+// on globalThis makes the fallback behave like one database in every bundle
+// and survives development hot reloads.
+interface InMemoryNoteStore {
+  notes: Map<string, StickyNote>;
+  flaggers: Map<string, Set<string>>;
+  reactionKeys: Map<string, Set<string>>;
+  flagReasons: Map<string, string[]>;
+}
+
+const globalStore = globalThis as typeof globalThis & {
+  __subwayTherapyStore?: InMemoryNoteStore;
+};
+
+const store =
+  globalStore.__subwayTherapyStore ??
+  (globalStore.__subwayTherapyStore = {
+    notes: new Map(),
+    flaggers: new Map(),
+    reactionKeys: new Map(),
+    flagReasons: new Map(),
+  });
+
+const notesStore = store.notes;
+const noteFlaggers = store.flaggers;
+const noteReactionKeys = store.reactionKeys;
+const noteFlagReasons = store.flagReasons;
 
 export function findAvailablePosition(): { x: number; y: number } {
   const { wallHeight, noteHeight } = WALL_CONFIG;
@@ -29,6 +64,117 @@ export async function getNote(id: string): Promise<StickyNote | null> {
   return notesStore.get(id) || null;
 }
 
+export async function getApprovedNote(id: string): Promise<StickyNote | null> {
+  const note = notesStore.get(id);
+  return note?.moderationStatus === "approved" ? note : null;
+}
+
+export async function getApprovedNotesPage(
+  limit: number = 48,
+  before?: string
+): Promise<StickyNote[]> {
+  return Array.from(notesStore.values())
+    .filter(
+      (note) =>
+        note.moderationStatus === "approved" &&
+        (!before || note.createdAt < before)
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, Math.min(100, Math.max(1, limit)));
+}
+
+export async function searchApprovedNotes(
+  term: string,
+  limit: number = 48
+): Promise<StickyNote[]> {
+  const needle = term.trim().toLowerCase();
+  if (!needle) return [];
+  return Array.from(notesStore.values())
+    .filter(
+      (note) =>
+        note.moderationStatus === "approved" &&
+        [note.text, note.caption, note.altText, note.searchText]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(needle)
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, Math.min(100, Math.max(1, limit)));
+}
+
+export async function getRandomApprovedNote(): Promise<StickyNote | null> {
+  const approved = Array.from(notesStore.values()).filter(
+    (note) => note.moderationStatus === "approved"
+  );
+  if (approved.length === 0) return null;
+  return approved[Math.floor(Math.random() * approved.length)];
+}
+
+export async function getPublicStats(): Promise<{
+  total: number;
+  today: number;
+  reactions: number;
+  countries: number;
+}> {
+  const approved = Array.from(notesStore.values()).filter(
+    (note) => note.moderationStatus === "approved"
+  );
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+  return {
+    total: approved.length,
+    today: approved.filter(
+      (note) => new Date(note.createdAt).getTime() >= todayStart.getTime()
+    ).length,
+    reactions: approved.reduce(
+      (total, note) => total + (note.reactionCount ?? 0),
+      0
+    ),
+    countries: new Set(
+      approved.map((note) => note.countryCode).filter(Boolean)
+    ).size,
+  };
+}
+
+export async function addReaction(
+  id: string,
+  reporterHash: string,
+  kind: ReactionKind
+): Promise<{
+  note: StickyNote | null;
+  duplicate: boolean;
+  reactionCount: number;
+  reactionCounts: ReturnType<typeof getReactionCounts>;
+} | null> {
+  const note = notesStore.get(id);
+  if (!note || note.moderationStatus !== "approved") return null;
+
+  const key = `${id}:${reporterHash}:${kind}`;
+  const keys = noteReactionKeys.get(id) ?? new Set<string>();
+  if (keys.has(key)) {
+    return {
+      note,
+      duplicate: true,
+      reactionCount: note.reactionCount ?? 0,
+      reactionCounts: getReactionCounts(note.reactionCounts),
+    };
+  }
+  keys.add(key);
+  noteReactionKeys.set(id, keys);
+
+  const counts = getReactionCounts(note.reactionCounts);
+  counts[kind] += 1;
+  const reactionCount = counts.heart + counts.hug + counts.strength + counts.metoo;
+  const updated = await updateNote(id, { reactionCounts: counts, reactionCount });
+  return {
+    note: updated,
+    duplicate: false,
+    reactionCount,
+    reactionCounts: counts,
+  };
+}
+
 export async function updateNote(
   id: string,
   updates: Partial<StickyNote>
@@ -51,6 +197,8 @@ export async function deleteNote(id: string): Promise<boolean> {
   }
 
   noteFlaggers.delete(id);
+  noteReactionKeys.delete(id);
+  noteFlagReasons.delete(id);
   return notesStore.delete(id);
 }
 
@@ -106,7 +254,8 @@ export async function getNotesForModeration(
 
 export async function flagNote(
   id: string,
-  reporterHash: string
+  reporterHash: string,
+  reason?: string
 ): Promise<{ note: StickyNote | null; duplicate: boolean }> {
   const note = notesStore.get(id);
   if (!note) return { note: null, duplicate: false };
@@ -118,6 +267,11 @@ export async function flagNote(
   }
   reporters.add(reporterHash);
   noteFlaggers.set(id, reporters);
+  if (reason?.trim()) {
+    const reasons = noteFlagReasons.get(id) ?? [];
+    reasons.push(reason.trim().slice(0, 120));
+    noteFlagReasons.set(id, reasons);
+  }
 
   const newFlagCount = note.flagCount + 1;
   const updates: Partial<StickyNote> = {
@@ -131,6 +285,10 @@ export async function flagNote(
 
   const updatedNote = await updateNote(id, updates);
   return { note: updatedNote, duplicate: false };
+}
+
+export async function getFlagReasons(id: string): Promise<string[]> {
+  return noteFlagReasons.get(id) ?? [];
 }
 
 export async function moderateNote(

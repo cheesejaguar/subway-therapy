@@ -169,7 +169,9 @@ body {
   }
 
   .sticky-note:hover {
-    transform: scale(1.05);
+    /* Preserve the note's rotation; scaling from identity made every note
+       snap upright under the cursor. */
+    transform: rotate(var(--rotation, 0deg)) scale(1.05);
     box-shadow:
       2px 4px 12px rgba(0, 0, 0, 0.18),
       0 0 0 1px rgba(0,0,0,0.03);
@@ -425,6 +427,299 @@ body {
   );
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
+}
+
+/* ═══════════════════════════════════════
+   TEXT NOTES
+   Real text, not a baked image, so it can be selected and translated.
+   ═══════════════════════════════════════ */
+.note-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-wrap: pretty;
+  overflow: hidden;
+}
+
+/* A soft vignette gives the endless tile wall the depth of a station. */
+.wall-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at center, transparent 52%, rgba(0,0,0,0.22) 100%),
+    linear-gradient(to bottom, rgba(0,0,0,0.16), transparent 12%, transparent 88%, rgba(0,0,0,0.2));
+}
+
+/* ═══════════════════════════════════════
+   CONTENT PAGES
+   ═══════════════════════════════════════ */
+.site-header {
+  background: rgba(20, 20, 20, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.site-footer {
+  background: #151515;
+}
+
+.content-prose {
+  color: rgba(255, 255, 255, 0.68);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  line-height: 1.75;
+}
+
+.content-prose .eyebrow {
+  color: var(--mta-yellow);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin: 0 0 12px;
+}
+
+.content-prose h1 {
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  margin: 0 0 20px;
+}
+
+.content-prose .lede {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 1.12rem;
+  line-height: 1.65;
+  margin-bottom: 28px;
+}
+
+.content-prose h2 {
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  margin: 40px 0 12px;
+}
+
+.content-prose p {
+  margin: 0 0 16px;
+}
+
+.content-prose ul,
+.content-prose ol {
+  margin: 0 0 20px;
+  padding-left: 1.25rem;
+}
+
+.content-prose li {
+  margin-bottom: 8px;
+}
+
+.content-prose a {
+  color: #fff;
+  text-decoration: underline;
+  text-decoration-color: rgba(252, 204, 10, 0.55);
+  text-underline-offset: 3px;
+}
+
+.content-prose a:hover {
+  text-decoration-color: var(--mta-yellow);
+}
+
+.content-prose strong {
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 600;
+}
+
+.content-prose code {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+
+.content-cta {
+  margin-top: 40px;
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.content-cta p {
+  color: rgba(255, 255, 255, 0.8);
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  margin-bottom: 14px;
+}
+
+.cta-button {
+  display: inline-block;
+  margin-right: 8px;
+  margin-bottom: 8px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  background: var(--mta-green);
+  color: #fff !important;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none !important;
+}
+
+.cta-button.secondary {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.8) !important;
+}
+
+.fact-list {
+  margin: 0 0 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.fact-list > div {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.fact-list dt {
+  color: rgba(255, 255, 255, 0.38);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding-top: 3px;
+}
+
+.fact-list dd {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+/* ═══════════════════════════════════════
+   HOST A WALL — PRINTABLE CARDS
+   ═══════════════════════════════════════ */
+.print-card {
+  background: #fffdf5;
+  color: #1a1a1a;
+  border: 1px dashed rgba(0, 0, 0, 0.35);
+  border-radius: 6px;
+  padding: 18px;
+  min-height: 270px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+}
+
+.print-card-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #00933c;
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.print-card-number {
+  color: rgba(0, 0, 0, 0.35);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.print-card-prompt {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.12;
+  margin: 18px 0 14px;
+}
+
+.print-card-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-bottom: 16px;
+  flex: 1;
+}
+
+.print-card-lines span {
+  display: block;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.18);
+}
+
+.print-card-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.print-card-brand {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  margin: 0;
+}
+
+.print-card-url {
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: rgba(0, 0, 0, 0.45);
+  margin: 2px 0 0;
+}
+
+@media print {
+  .no-print,
+  .site-header,
+  .site-footer {
+    display: none !important;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .host-page {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .print-cards {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 12px !important;
+  }
+
+  .print-card {
+    break-inside: avoid;
+    box-shadow: none;
+    min-height: 250px;
+  }
 }
 
 /* Scrollbar styling */
