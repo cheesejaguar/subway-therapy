@@ -26,36 +26,8 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
   const containerRef = useRef<HTMLDivElement>(null);
   const sliderRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
-
-  // Stop all pointer/touch/mouse events from propagating to the Wall's
-  // gesture handler.  useGesture binds native (non-React) listeners on
-  // the Wall container, so we must also use native listeners here at
-  // the capture phase to beat it.
-  React.useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    const stop = (e: Event) => {
-      e.stopPropagation();
-    };
-
-    // Capture phase so we run before useGesture's bubble-phase listeners
-    el.addEventListener("pointerdown", stop, true);
-    el.addEventListener("mousedown", stop, true);
-    el.addEventListener("touchstart", stop, { capture: true, passive: false });
-    el.addEventListener("pointermove", stop, true);
-    el.addEventListener("mousemove", stop, true);
-    el.addEventListener("touchmove", stop, { capture: true, passive: false });
-
-    return () => {
-      el.removeEventListener("pointerdown", stop, true);
-      el.removeEventListener("mousedown", stop, true);
-      el.removeEventListener("touchstart", stop, true);
-      el.removeEventListener("pointermove", stop, true);
-      el.removeEventListener("mousemove", stop, true);
-      el.removeEventListener("touchmove", stop, true);
-    };
-  }, []);
+  const isDraggingRef = useRef(false);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
 
   const sliderWidth = 220;
   const sliderHeight = 28;
@@ -98,60 +70,158 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
     [scale, wallHeight, onNavigate]
   );
 
+  const endDrag = useCallback(() => {
+    isDraggingRef.current = false;
+    setIsDragging(false);
+    dragCleanupRef.current?.();
+    dragCleanupRef.current = null;
+  }, []);
+
+  const startDrag = useCallback(
+    (clientX: number) => {
+      if (isDraggingRef.current) {
+        navigateToPosition(clientX);
+        return;
+      }
+
+      isDraggingRef.current = true;
+      setIsDragging(true);
+      navigateToPosition(clientX);
+
+      // Document capture listeners run before the Wall's gesture handler and
+      // before the minimap's own capture guard, so dragging works even while
+      // the pointer stays over the map.
+      const handlePointerMove = (e: PointerEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        navigateToPosition(e.clientX);
+      };
+
+      const handleMouseMove = (e: MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // Pointer events cover every browser the wall supports. This fallback
+        // only navigates where PointerEvent is unavailable.
+        if ("PointerEvent" in window) return;
+        navigateToPosition(e.clientX);
+      };
+
+      const handleTouchMove = (e: TouchEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if ("PointerEvent" in window) return;
+        if (e.touches.length !== 1) return;
+        navigateToPosition(e.touches[0].clientX);
+      };
+
+      const handleEnd = (e: Event) => {
+        e.stopPropagation();
+        endDrag();
+      };
+
+      document.addEventListener("pointermove", handlePointerMove, {
+        capture: true,
+        passive: false,
+      });
+      document.addEventListener("pointerup", handleEnd, true);
+      document.addEventListener("pointercancel", handleEnd, true);
+      document.addEventListener("mousemove", handleMouseMove, {
+        capture: true,
+        passive: false,
+      });
+      document.addEventListener("mouseup", handleEnd, true);
+      document.addEventListener("touchmove", handleTouchMove, {
+        capture: true,
+        passive: false,
+      });
+      document.addEventListener("touchend", handleEnd, true);
+      document.addEventListener("touchcancel", handleEnd, true);
+
+      dragCleanupRef.current = () => {
+        document.removeEventListener("pointermove", handlePointerMove, true);
+        document.removeEventListener("pointerup", handleEnd, true);
+        document.removeEventListener("pointercancel", handleEnd, true);
+        document.removeEventListener("mousemove", handleMouseMove, true);
+        document.removeEventListener("mouseup", handleEnd, true);
+        document.removeEventListener("touchmove", handleTouchMove, true);
+        document.removeEventListener("touchend", handleEnd, true);
+        document.removeEventListener("touchcancel", handleEnd, true);
+      };
+    },
+    [endDrag, navigateToPosition]
+  );
+
+  // The Wall's gesture handler binds native listeners on the wall container,
+  // so React's synthetic stopPropagation is too late. Keep every minimap
+  // interaction away from it and start drags from the same native capture
+  // listener. This is why the slider cannot rely on onMouseDown/onTouchStart:
+  // the capture guard stops those events before React's delegated handlers.
   React.useEffect(() => {
-    if (!isDragging) return;
+    const container = containerRef.current;
+    if (!container) return;
 
-    const handleMouseMove = (e: MouseEvent) => {
-      e.preventDefault();
-      navigateToPosition(e.clientX);
-    };
+    const isSliderTarget = (target: EventTarget | null) =>
+      target instanceof Node && Boolean(sliderRef.current?.contains(target));
 
-    const handleMouseUp = () => setIsDragging(false);
-
-    const handleTouchMoveDoc = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
-      e.preventDefault();
+    const stop = (e: Event) => {
       e.stopPropagation();
-      navigateToPosition(e.touches[0].clientX);
     };
 
-    const handleTouchEndDoc = () => setIsDragging(false);
+    const handlePointerDown = (e: PointerEvent) => {
+      e.stopPropagation();
+      if (e.button !== 0 || !isSliderTarget(e.target)) return;
+      e.preventDefault();
+      startDrag(e.clientX);
+    };
 
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-    document.addEventListener("touchmove", handleTouchMoveDoc, { passive: false });
-    document.addEventListener("touchend", handleTouchEndDoc);
-    document.addEventListener("touchcancel", handleTouchEndDoc);
+    const handleMouseDown = (e: MouseEvent) => {
+      e.stopPropagation();
+      if (e.button !== 0 || !isSliderTarget(e.target)) return;
+      // A pointerdown already started the gesture in modern browsers.
+      if (isDraggingRef.current) return;
+      e.preventDefault();
+      startDrag(e.clientX);
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+      e.stopPropagation();
+      if (!isSliderTarget(e.target) || e.touches.length !== 1) return;
+      // A pointerdown already started the gesture in modern browsers.
+      if (isDraggingRef.current) return;
+      e.preventDefault();
+      startDrag(e.touches[0].clientX);
+    };
+
+    container.addEventListener("pointerdown", handlePointerDown, true);
+    container.addEventListener("mousedown", handleMouseDown, true);
+    container.addEventListener("touchstart", handleTouchStart, {
+      capture: true,
+      passive: false,
+    });
+    container.addEventListener("pointermove", stop, true);
+    container.addEventListener("mousemove", stop, true);
+    container.addEventListener("touchmove", stop, {
+      capture: true,
+      passive: false,
+    });
 
     return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-      document.removeEventListener("touchmove", handleTouchMoveDoc);
-      document.removeEventListener("touchend", handleTouchEndDoc);
-      document.removeEventListener("touchcancel", handleTouchEndDoc);
+      container.removeEventListener("pointerdown", handlePointerDown, true);
+      container.removeEventListener("mousedown", handleMouseDown, true);
+      container.removeEventListener("touchstart", handleTouchStart, true);
+      container.removeEventListener("pointermove", stop, true);
+      container.removeEventListener("mousemove", stop, true);
+      container.removeEventListener("touchmove", stop, true);
     };
-  }, [isDragging, navigateToPosition]);
+  }, [startDrag]);
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      setIsDragging(true);
-      navigateToPosition(e.clientX);
-    },
-    [navigateToPosition]
-  );
-
-  const handleTouchStart = useCallback(
-    (e: React.TouchEvent<HTMLDivElement>) => {
-      if (e.touches.length === 1) {
-        e.stopPropagation();
-        e.preventDefault();
-        setIsDragging(true);
-        navigateToPosition(e.touches[0].clientX);
-      }
-    },
-    [navigateToPosition]
-  );
+  // If the component unmounts mid-drag, drop the document listeners.
+  React.useEffect(() => {
+    return () => {
+      dragCleanupRef.current?.();
+      dragCleanupRef.current = null;
+    };
+  }, []);
 
   const viewportCenterX = Math.max(
     0,
@@ -227,9 +297,7 @@ export default function Minimap({ viewportBounds, onNavigate, notes = [] }: Mini
         className={`minimap-track rounded select-none ${
           isDragging ? "cursor-grabbing" : "cursor-grab"
         }`}
-        style={{ width: sliderWidth, height: sliderHeight }}
-        onMouseDown={handleMouseDown}
-        onTouchStart={handleTouchStart}
+        style={{ width: sliderWidth, height: sliderHeight, touchAction: "none" }}
         onKeyDown={handleKeyDown}
         tabIndex={0}
         role="slider"
