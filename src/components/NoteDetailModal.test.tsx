@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import NoteDetailModal from "./NoteDetailModal";
 import { PublicStickyNote } from "@/lib/types";
 
@@ -33,11 +33,19 @@ describe("NoteDetailModal", () => {
     );
   });
 
-  it("reports the note via the report button", () => {
+  it("reports the note with a selected reason", async () => {
     const onReport = vi.fn();
     render(<NoteDetailModal note={note} onClose={() => {}} onReport={onReport} />);
-    fireEvent.click(screen.getByRole("button", { name: /report note/i }));
-    expect(onReport).toHaveBeenCalledWith(note.id);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report this note" }));
+    fireEvent.change(screen.getByLabelText("What is wrong with this note?"), {
+      target: { value: "Spam or advertising" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+
+    await waitFor(() => {
+      expect(onReport).toHaveBeenCalledWith(note.id, "Spam or advertising");
+    });
   });
 
   it("closes on Escape and on overlay click", () => {

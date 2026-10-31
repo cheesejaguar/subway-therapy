@@ -10,6 +10,17 @@ const moderationStatus = v.union(
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const FLAG_THRESHOLD = 3;
+const PUBLIC_PAGE_SIZE = 48;
+const MAX_PUBLIC_PAGE_SIZE = 100;
+
+const noteKind = v.union(v.literal("text"), v.literal("drawing"));
+
+const reactionKind = v.union(
+  v.literal("heart"),
+  v.literal("hug"),
+  v.literal("strength"),
+  v.literal("metoo")
+);
 
 // Public query: only approved notes are visible on the public wall.
 export const getPublicNotes = query({
@@ -19,6 +30,104 @@ export const getPublicNotes = query({
       .query("notes")
       .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "approved"))
       .collect();
+  },
+});
+
+// Public query: a single approved note for permalink pages and share cards.
+export const getApprovedNoteByVisibleId = query({
+  args: { visibleId: v.string() },
+  handler: async (ctx, args) => {
+    const notes = await ctx.db
+      .query("notes")
+      .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
+      .collect();
+    return notes.find((note) => note.moderationStatus === "approved") ?? null;
+  },
+});
+
+// Public query: gallery page, newest first with a simple cursor. The gallery
+// is curated by humans and only ever shows approved notes.
+export const getApprovedNotesPage = query({
+  args: {
+    limit: v.optional(v.number()),
+    before: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(
+      MAX_PUBLIC_PAGE_SIZE,
+      Math.max(1, Math.floor(args.limit ?? PUBLIC_PAGE_SIZE))
+    );
+    const query = ctx.db
+      .query("notes")
+      .withIndex("by_status_createdAt", (q) => {
+        const base = q.eq("moderationStatus", "approved");
+        return args.before ? base.lt("createdAt", args.before) : base;
+      })
+      .order("desc");
+    return await query.take(limit);
+  },
+});
+
+// Public query: full-text search over text, captions, and transcripts.
+export const searchApprovedNotes = query({
+  args: {
+    term: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const term = args.term.trim().slice(0, 120);
+    if (!term) return [];
+    const limit = Math.min(
+      MAX_PUBLIC_PAGE_SIZE,
+      Math.max(1, Math.floor(args.limit ?? PUBLIC_PAGE_SIZE))
+    );
+    return await ctx.db
+      .query("notes")
+      .withSearchIndex("search_text", (q) =>
+        q.search("searchText", term).eq("moderationStatus", "approved")
+      )
+      .take(limit);
+  },
+});
+
+// Public query: random approved note for the "take me somewhere" affordance.
+export const getRandomApprovedNote = query({
+  args: {},
+  handler: async (ctx) => {
+    const notes = await ctx.db
+      .query("notes")
+      .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "approved"))
+      .collect();
+    if (notes.length === 0) return null;
+    return notes[Math.floor(Math.random() * notes.length)];
+  },
+});
+
+// Public query: wall-level counts for the live HUD and gallery.
+export const getPublicStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const approved = await ctx.db
+      .query("notes")
+      .withIndex("by_moderationStatus", (q) => q.eq("moderationStatus", "approved"))
+      .collect();
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const today = approved.filter(
+      (note) => new Date(note.createdAt).getTime() >= todayStart.getTime()
+    ).length;
+    const reactions = approved.reduce(
+      (total, note) => total + (note.reactionCount ?? 0),
+      0
+    );
+    return {
+      total: approved.length,
+      today,
+      reactions,
+      countries: new Set(
+        approved.map((note) => note.countryCode).filter(Boolean)
+      ).size,
+    };
   },
 });
 
@@ -156,6 +265,23 @@ export const createNote = internalMutation({
     moderationStatus,
     flagCount: v.number(),
     sessionId: v.string(),
+    kind: v.optional(noteKind),
+    text: v.optional(v.string()),
+    caption: v.optional(v.string()),
+    altText: v.optional(v.string()),
+    thumbUrl: v.optional(v.string()),
+    reactionCount: v.optional(v.number()),
+    reactionCounts: v.optional(
+      v.object({
+        heart: v.number(),
+        hug: v.number(),
+        strength: v.number(),
+        metoo: v.number(),
+      })
+    ),
+    countryCode: v.optional(v.string()),
+    searchText: v.optional(v.string()),
+    manageTokenHash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const noteId = await ctx.db.insert("notes", args);
@@ -187,6 +313,7 @@ export const flagNote = internalMutation({
   args: {
     visibleId: v.string(),
     reporterHash: v.string(),
+    reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const notes = await ctx.db
@@ -211,6 +338,7 @@ export const flagNote = internalMutation({
     await ctx.db.insert("flags", {
       visibleId: args.visibleId,
       reporterHash: args.reporterHash,
+      reason: args.reason?.trim().slice(0, 120),
       createdAt: new Date().toISOString(),
     });
 
@@ -228,7 +356,78 @@ export const flagNote = internalMutation({
   },
 });
 
-// Internal mutation: delete a note and related flag records.
+// Internal mutation: add a reaction with per-reporter/per-kind dedupe and
+// update the denormalized counts stored on the note.
+export const addReaction = internalMutation({
+  args: {
+    visibleId: v.string(),
+    reporterHash: v.string(),
+    kind: reactionKind,
+  },
+  handler: async (ctx, args) => {
+    const notes = await ctx.db
+      .query("notes")
+      .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
+      .collect();
+    const note = notes.find((candidate) => candidate.moderationStatus === "approved");
+    if (!note) return null;
+
+    const existing = await ctx.db
+      .query("reactions")
+      .withIndex("by_visibleId_reporterHash_kind", (q) =>
+        q
+          .eq("visibleId", args.visibleId)
+          .eq("reporterHash", args.reporterHash)
+          .eq("kind", args.kind)
+      )
+      .collect();
+    if (existing.length > 0) {
+      return {
+        duplicate: true,
+        reactionCount: note.reactionCount ?? 0,
+        reactionCounts: note.reactionCounts ?? {
+          heart: 0,
+          hug: 0,
+          strength: 0,
+          metoo: 0,
+        },
+      };
+    }
+
+    await ctx.db.insert("reactions", {
+      visibleId: args.visibleId,
+      reporterHash: args.reporterHash,
+      kind: args.kind,
+      createdAt: new Date().toISOString(),
+    });
+
+    const counts = {
+      heart: 0,
+      hug: 0,
+      strength: 0,
+      metoo: 0,
+      ...(note.reactionCounts ?? {}),
+    };
+    counts[args.kind] += 1;
+    const reactionCount = counts.heart + counts.hug + counts.strength + counts.metoo;
+    await ctx.db.patch(note._id, { reactionCounts: counts, reactionCount });
+
+    return { duplicate: false, reactionCount, reactionCounts: counts };
+  },
+});
+
+// Internal query: report reasons for the admin review drawer.
+export const getFlagReasons = internalQuery({
+  args: { visibleId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("flags")
+      .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
+      .collect();
+  },
+});
+
+// Internal mutation: delete a note and related flag/reaction records.
 export const deleteNote = internalMutation({
   args: {
     visibleId: v.string(),
@@ -248,7 +447,14 @@ export const deleteNote = internalMutation({
       .query("flags")
       .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
       .collect();
-    await Promise.all(flags.map((flag) => ctx.db.delete(flag._id)));
+    const reactions = await ctx.db
+      .query("reactions")
+      .withIndex("by_visibleId", (q) => q.eq("visibleId", args.visibleId))
+      .collect();
+    await Promise.all([
+      ...flags.map((flag) => ctx.db.delete(flag._id)),
+      ...reactions.map((reaction) => ctx.db.delete(reaction._id)),
+    ]);
 
     return { success: true as const, imageUrl: note.imageUrl };
   },

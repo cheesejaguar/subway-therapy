@@ -8,6 +8,13 @@ import {
   getNotesInViewport,
   getAllNotes,
   getNotesForModeration,
+  getApprovedNote,
+  getApprovedNotesPage,
+  getRandomApprovedNote,
+  getPublicStats,
+  searchApprovedNotes,
+  addReaction,
+  getFlagReasons,
   flagNote,
   moderateNote,
   getStats,
@@ -291,6 +298,235 @@ describe("storage", () => {
       const newerIndex = result.findIndex((n) => n.id === "newer");
 
       expect(newerIndex).toBeLessThan(olderIndex);
+    });
+  });
+
+  describe("public reads", () => {
+    it("returns only approved notes by id", async () => {
+      await createNote(
+        createTestNote({ id: "public-approved", moderationStatus: "approved" })
+      );
+      await createNote(
+        createTestNote({ id: "public-pending", moderationStatus: "pending" })
+      );
+
+      expect(await getApprovedNote("public-approved")).not.toBeNull();
+      expect(await getApprovedNote("public-pending")).toBeNull();
+      expect(await getApprovedNote("missing-note")).toBeNull();
+    });
+
+    it("pages approved notes newest first and honors before", async () => {
+      await createNote(
+        createTestNote({
+          id: "page-oldest",
+          moderationStatus: "approved",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        })
+      );
+      await createNote(
+        createTestNote({
+          id: "page-middle",
+          moderationStatus: "approved",
+          createdAt: "2026-01-02T00:00:00.000Z",
+        })
+      );
+      await createNote(
+        createTestNote({
+          id: "page-newest",
+          moderationStatus: "approved",
+          createdAt: "2026-01-03T00:00:00.000Z",
+        })
+      );
+      await createNote(
+        createTestNote({
+          id: "page-pending",
+          moderationStatus: "pending",
+          createdAt: "2026-01-04T00:00:00.000Z",
+        })
+      );
+
+      const firstPage = await getApprovedNotesPage(2);
+      expect(firstPage.map((note) => note.id)).toEqual([
+        "page-newest",
+        "page-middle",
+      ]);
+
+      const olderPage = await getApprovedNotesPage(2, "2026-01-02T00:00:00.000Z");
+      expect(olderPage.map((note) => note.id)).toEqual(["page-oldest"]);
+    });
+
+    it("searches approved text, captions, and alt text", async () => {
+      await createNote(
+        createTestNote({
+          id: "search-text",
+          moderationStatus: "approved",
+          kind: "text",
+          text: "I am learning to ask for help",
+        })
+      );
+      await createNote(
+        createTestNote({
+          id: "search-alt",
+          moderationStatus: "approved",
+          kind: "drawing",
+          altText: "A small green plant in a window",
+        })
+      );
+      await createNote(
+        createTestNote({
+          id: "search-caption",
+          moderationStatus: "approved",
+          kind: "drawing",
+          caption: "The view from the Q train",
+        })
+      );
+      await createNote(
+        createTestNote({
+          id: "search-hidden",
+          moderationStatus: "pending",
+          kind: "text",
+          text: "A hidden note about help",
+        })
+      );
+
+      const helpResults = await searchApprovedNotes("help");
+      expect(helpResults.map((note) => note.id)).toEqual(["search-text"]);
+
+      const plantResults = await searchApprovedNotes("GREEN PLANT");
+      expect(plantResults.map((note) => note.id)).toEqual(["search-alt"]);
+
+      const trainResults = await searchApprovedNotes("q train");
+      expect(trainResults.map((note) => note.id)).toEqual(["search-caption"]);
+
+      expect(await searchApprovedNotes("   ")).toEqual([]);
+    });
+
+    it("returns a random approved note or null", async () => {
+      expect(await getRandomApprovedNote()).toBeNull();
+
+      await createNote(
+        createTestNote({ id: "random-pending", moderationStatus: "pending" })
+      );
+      expect(await getRandomApprovedNote()).toBeNull();
+
+      await createNote(
+        createTestNote({ id: "random-approved", moderationStatus: "approved" })
+      );
+      expect((await getRandomApprovedNote())?.id).toBe("random-approved");
+    });
+
+    it("reports public stats for approved notes only", async () => {
+      const now = new Date().toISOString();
+      await createNote(
+        createTestNote({
+          id: "stats-approved-today",
+          moderationStatus: "approved",
+          createdAt: now,
+          reactionCount: 3,
+          countryCode: "US",
+        })
+      );
+      await createNote(
+        createTestNote({
+          id: "stats-approved-old",
+          moderationStatus: "approved",
+          createdAt: "2020-01-01T00:00:00.000Z",
+          reactionCount: 2,
+          countryCode: "GB",
+        })
+      );
+      await createNote(
+        createTestNote({
+          id: "stats-pending",
+          moderationStatus: "pending",
+          createdAt: now,
+          reactionCount: 99,
+          countryCode: "JP",
+        })
+      );
+
+      const stats = await getPublicStats();
+
+      expect(stats.total).toBe(2);
+      expect(stats.today).toBe(1);
+      expect(stats.reactions).toBe(5);
+      expect(stats.countries).toBe(2);
+    });
+  });
+
+  describe("addReaction", () => {
+    it("increments the count and returns the updated note", async () => {
+      await createNote(createTestNote({ id: "react-1", moderationStatus: "approved" }));
+
+      const result = await addReaction("react-1", "reporter-a", "heart");
+
+      expect(result?.duplicate).toBe(false);
+      expect(result?.reactionCount).toBe(1);
+      expect(result?.reactionCounts.heart).toBe(1);
+      expect(result?.note?.reactionCount).toBe(1);
+    });
+
+    it("dedupes the same reporter and reaction kind", async () => {
+      await createNote(createTestNote({ id: "react-2", moderationStatus: "approved" }));
+
+      const first = await addReaction("react-2", "reporter-a", "hug");
+      const second = await addReaction("react-2", "reporter-a", "hug");
+
+      expect(first?.duplicate).toBe(false);
+      expect(second?.duplicate).toBe(true);
+      expect(second?.reactionCount).toBe(1);
+    });
+
+    it("allows the same reporter to send different reactions", async () => {
+      await createNote(createTestNote({ id: "react-3", moderationStatus: "approved" }));
+
+      await addReaction("react-3", "reporter-a", "heart");
+      const result = await addReaction("react-3", "reporter-a", "strength");
+
+      expect(result?.duplicate).toBe(false);
+      expect(result?.reactionCount).toBe(2);
+      expect(result?.reactionCounts.heart).toBe(1);
+      expect(result?.reactionCounts.strength).toBe(1);
+    });
+
+    it("counts reactions from different reporters", async () => {
+      await createNote(createTestNote({ id: "react-4", moderationStatus: "approved" }));
+
+      await addReaction("react-4", "reporter-a", "metoo");
+      const result = await addReaction("react-4", "reporter-b", "metoo");
+
+      expect(result?.duplicate).toBe(false);
+      expect(result?.reactionCounts.metoo).toBe(2);
+    });
+
+    it("refuses reactions on missing or unapproved notes", async () => {
+      await createNote(createTestNote({ id: "react-pending", moderationStatus: "pending" }));
+
+      expect(await addReaction("react-pending", "reporter-a", "heart")).toBeNull();
+      expect(await addReaction("react-missing", "reporter-a", "heart")).toBeNull();
+    });
+  });
+
+  describe("getFlagReasons", () => {
+    it("returns reasons in report order", async () => {
+      await createNote(createTestNote({ id: "reasons-1" }));
+
+      await flagNote("reasons-1", "reporter-a", "Hate speech");
+      await flagNote("reasons-1", "reporter-b", "Spam or advertising");
+
+      expect(await getFlagReasons("reasons-1")).toEqual([
+        "Hate speech",
+        "Spam or advertising",
+      ]);
+    });
+
+    it("ignores empty reasons and returns an empty list when none exist", async () => {
+      await createNote(createTestNote({ id: "reasons-2" }));
+
+      await flagNote("reasons-2", "reporter-a", "   ");
+
+      expect(await getFlagReasons("reasons-2")).toEqual([]);
+      expect(await getFlagReasons("missing-note")).toEqual([]);
     });
   });
 

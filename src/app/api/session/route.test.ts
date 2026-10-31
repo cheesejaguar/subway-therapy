@@ -6,6 +6,12 @@ import * as session from "@/lib/session";
 vi.mock("@/lib/session", () => ({
   canUserPostNote: vi.fn(),
   formatTimeRemaining: vi.fn((ms: number) => `${Math.floor(ms / 3600000)}h`),
+  getOrCreateSessionId: vi.fn(async () => "test-session"),
+  getSessionCookieConfig: vi.fn((sessionId: string) => ({
+    name: "session_id",
+    value: sessionId,
+    options: { httpOnly: true, path: "/" },
+  })),
 }));
 
 describe("GET /api/session", () => {

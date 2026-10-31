@@ -49,6 +49,7 @@ vi.mock("@/lib/blob", () => ({
 
 vi.mock("@/lib/moderation", () => ({
   moderateImage: vi.fn(),
+  moderateText: vi.fn(),
 }));
 
 vi.mock("@/lib/abuse", () => ({
@@ -314,6 +315,13 @@ describe("POST /api/notes", () => {
       inputTokens: 1200,
       outputTokens: 50,
     });
+    vi.mocked(moderation.moderateText).mockResolvedValue({
+      approved: true,
+      reason: "Appropriate content",
+      confidence: 0.95,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
   });
 
   it("should return 429 when attempt rate limit is exceeded", async () => {
@@ -451,6 +459,31 @@ describe("POST /api/notes", () => {
     // The atomic reservation IS the daily-limit record.
     expect(session.reserveNoteSubmission).toHaveBeenCalledTimes(1);
     expect(session.recordNoteSubmission).not.toHaveBeenCalled();
+  });
+
+  it("records the visitor's country from the Vercel edge header", async () => {
+    const request = createMockRequest("http://localhost:3000/api/notes", {
+      method: "POST",
+      headers: { "x-vercel-ip-country": "ca" },
+      body: {
+        kind: "text",
+        text: "A note from the other side of the world.",
+        color: "blue",
+        x: 100,
+        y: 200,
+      },
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(storage.createNote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "text",
+        text: "A note from the other side of the world.",
+        countryCode: "CA",
+      })
+    );
   });
 
   it("should return 429 when the atomic reservation is denied", async () => {

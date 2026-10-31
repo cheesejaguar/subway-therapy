@@ -10,12 +10,14 @@ import React, {
 import { useGesture } from "@use-gesture/react";
 import {
   StickyNote,
-  NoteColor,
+  PendingNoteDraft,
   WALL_CONFIG,
   ViewportBounds,
   NOTE_COLORS,
   clampNoteToWall,
   getMaxOverlapWithNotes,
+  getNoteKind,
+  getNoteText,
   MAX_OVERLAP_PERCENTAGE,
 } from "@/lib/types";
 import {
@@ -27,6 +29,7 @@ import {
 } from "@/lib/viewport";
 import StickyNoteComponent from "./StickyNote";
 import Minimap from "./Minimap";
+import NoteText from "./NoteText";
 
 // Tile size for chunked rendering (pixels)
 const TILE_SIZE = 2000;
@@ -40,23 +43,31 @@ const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 const KEYBOARD_ZOOM_STEP = 1.15;
 const BUTTON_ZOOM_STEP = 1.25;
 
-interface PendingNote {
-  imageData: string;
-  color: NoteColor;
+export interface WallCamera {
+  x: number;
+  y: number;
+  zoom?: number;
+}
+
+export interface WallFocusRequest extends WallCamera {
+  key: number;
 }
 
 interface WallProps {
   notes: StickyNote[];
   onNoteClick?: (note: StickyNote) => void;
-  onViewportChange?: (bounds: ViewportBounds) => void;
+  onViewportChange?: (bounds: ViewportBounds, view: ViewState) => void;
   isLoading?: boolean;
   // False while a note fetch for the current viewport is still outstanding —
   // gates the "empty wall" hint so it can't flash before data arrives.
   isViewportReady?: boolean;
   isPlacingNote?: boolean;
-  pendingNote?: PendingNote | null;
+  pendingNote?: PendingNoteDraft | null;
   onPlaceNote?: (x: number, y: number) => void;
   onCancelPlacement?: () => void;
+  // Deep-link camera and one-shot focus requests (wander, list view, permalink).
+  initialCamera?: WallCamera;
+  focusRequest?: WallFocusRequest | null;
 }
 
 const { wallWidth, wallHeight, noteWidth, noteHeight } = WALL_CONFIG;
@@ -72,8 +83,13 @@ export default function Wall({
   pendingNote = null,
   onPlaceNote,
   onCancelPlacement,
+  initialCamera,
+  focusRequest = null,
 }: WallProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Read once at mount: the URL camera should not re-center the wall every
+  // time the parent re-renders.
+  const initialCameraRef = useRef(initialCamera);
   const [view, setView] = useState<ViewState>({ x: 0, y: 0, zoom: 1 });
   const [containerSize, setContainerSize] = useState({ width: 1000, height: 1000 });
   const [ghostPosition, setGhostPosition] = useState<{ x: number; y: number } | null>(null);
@@ -120,11 +136,20 @@ export default function Wall({
         setContainerSize({ width: rect.width, height: rect.height });
 
         if (!hasInitialized) {
-          const centerX = -WALL_CENTER_X + rect.width / 2;
-          const centerY = -wallHeight / 2 + rect.height / 2;
+          const camera = initialCameraRef.current;
+          const zoom = Math.min(
+            MAX_ZOOM,
+            Math.max(MIN_ZOOM, camera?.zoom ?? 1)
+          );
+          const centerX = camera
+            ? -camera.x * zoom + rect.width / 2
+            : -WALL_CENTER_X + rect.width / 2;
+          const centerY = camera
+            ? -camera.y * zoom + rect.height / 2
+            : -wallHeight / 2 + rect.height / 2;
           setView((v) =>
             clampViewToWall(
-              { ...v, x: centerX, y: centerY },
+              { ...v, x: centerX, y: centerY, zoom },
               rect.width,
               rect.height
             )
@@ -158,11 +183,28 @@ export default function Wall({
     if (!onViewportChange || !hasInitialized) return;
 
     const timeoutId = setTimeout(() => {
-      onViewportChange(getViewportBounds());
+      onViewportChange(getViewportBounds(), view);
     }, 100);
 
     return () => clearTimeout(timeoutId);
   }, [view, containerSize, hasInitialized, getViewportBounds, onViewportChange]);
+
+  // One-shot focus requests: wander, list-view selection, or a shared note.
+  useEffect(() => {
+    if (!focusRequest || !hasInitialized) return;
+    const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, focusRequest.zoom ?? 1));
+    setView(
+      clampViewToWall(
+        {
+          x: -focusRequest.x * zoom + sizeRef.current.width / 2,
+          y: -focusRequest.y * zoom + sizeRef.current.height / 2,
+          zoom,
+        },
+        sizeRef.current.width,
+        sizeRef.current.height
+      )
+    );
+  }, [focusRequest, hasInitialized]);
 
   const screenToWall = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } => {
@@ -569,14 +611,26 @@ export default function Wall({
                 : "0 0 20px rgba(255, 0, 0, 0.5)",
             }}
           >
-            <img
-              src={pendingNote.imageData}
-              alt="Note preview"
-              className="w-full h-full object-contain"
-              style={{
-                opacity: isPlacementValid ? 1 : 0.5,
-              }}
-            />
+            {getNoteKind(pendingNote) === "text" && getNoteText(pendingNote) ? (
+              <div className="w-full h-full flex items-center justify-center p-1">
+                <NoteText
+                  text={getNoteText(pendingNote)}
+                  size="wall"
+                  className="text-center"
+                  style={{ opacity: isPlacementValid ? 1 : 0.5 }}
+                />
+              </div>
+            ) : pendingNote.imageData ? (
+              // eslint-disable-next-line @next/next/no-img-element -- A local data URL preview.
+              <img
+                src={pendingNote.imageData}
+                alt="Note preview"
+                className="w-full h-full object-contain"
+                style={{
+                  opacity: isPlacementValid ? 1 : 0.5,
+                }}
+              />
+            ) : null}
           </div>
         )}
       </div>
@@ -714,6 +768,7 @@ export default function Wall({
         <Minimap
           viewportBounds={bounds}
           onNavigate={handleMinimapNavigate}
+          notes={notes}
         />
       )}
     </div>

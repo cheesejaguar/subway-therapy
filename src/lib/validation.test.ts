@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  MAX_TEXT_LENGTH,
   validateCreateNoteRequest,
   validateNoteId,
   validateAdminModerationRequest,
   validateAdminBatchModerationRequest,
+  validateReactionRequest,
+  validateReportReason,
 } from "./validation";
 
 describe("validation", () => {
@@ -62,6 +65,137 @@ describe("validation", () => {
         expect(result.value.x).toBe(0);
         expect(result.value.y).toBeLessThanOrEqual(4050);
       }
+    });
+
+    it("accepts a text note and infers its kind from the body", () => {
+      const result = validateCreateNoteRequest({
+        text: "  I am still here.  ",
+        color: "pink",
+        x: 100,
+        y: 200,
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.kind).toBe("text");
+        expect(result.value.text).toBe("I am still here.");
+        expect(result.value.imageData).toBeUndefined();
+      }
+    });
+
+    it("accepts an explicit text kind without image data", () => {
+      const result = validateCreateNoteRequest({
+        kind: "text",
+        text: "A note for the next person",
+        color: "blue",
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.kind).toBe("text");
+        expect(result.value.x).toBeUndefined();
+        expect(result.value.y).toBeUndefined();
+      }
+    });
+
+    it("rejects a text note with no body", () => {
+      const result = validateCreateNoteRequest({
+        kind: "text",
+        text: "   ",
+        color: "yellow",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("Write a message");
+      }
+    });
+
+    it("rejects text notes over the character limit", () => {
+      const result = validateCreateNoteRequest({
+        kind: "text",
+        text: "a".repeat(MAX_TEXT_LENGTH + 1),
+        color: "yellow",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain(`${MAX_TEXT_LENGTH} characters`);
+      }
+    });
+
+    it("rejects one-sided coordinates on text notes", () => {
+      const result = validateCreateNoteRequest({
+        kind: "text",
+        text: "Hello",
+        color: "green",
+        x: 100,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("Both x and y");
+      }
+    });
+
+    it("rejects non-numeric text-note coordinates", () => {
+      const result = validateCreateNoteRequest({
+        kind: "text",
+        text: "Hello",
+        color: "green",
+        x: "left",
+        y: 200,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("Invalid note coordinates");
+      }
+    });
+  });
+
+  describe("validateReactionRequest", () => {
+    it("accepts a known reaction for a valid note", () => {
+      expect(
+        validateReactionRequest({ noteId: "note-0001", kind: "heart" })
+      ).toEqual({
+        ok: true,
+        value: { noteId: "note-0001", kind: "heart" },
+      });
+    });
+
+    it("rejects an unknown reaction", () => {
+      const result = validateReactionRequest({
+        noteId: "note-0001",
+        kind: "applause",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("Invalid reaction");
+    });
+
+    it("rejects an invalid note id", () => {
+      const result = validateReactionRequest({ noteId: "bad", kind: "hug" });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("Invalid note ID");
+    });
+  });
+
+  describe("validateReportReason", () => {
+    it("trims a provided reason", () => {
+      expect(validateReportReason("  Harassment or bullying  ")).toBe(
+        "Harassment or bullying"
+      );
+    });
+
+    it("truncates excessively long reasons", () => {
+      expect(validateReportReason("x".repeat(200))).toHaveLength(120);
+    });
+
+    it("returns undefined for empty or non-string reasons", () => {
+      expect(validateReportReason("   ")).toBeUndefined();
+      expect(validateReportReason(42)).toBeUndefined();
     });
   });
 

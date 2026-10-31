@@ -61,6 +61,35 @@ describe("StickyNote", () => {
     expect(screen.getByRole("button").className).not.toContain("note-appear");
   });
 
+  it("renders typed notes as selectable text instead of an image", () => {
+    render(
+      <StickyNoteComponent
+        note={makeNote({ kind: "text", text: "I am still here." })}
+      />
+    );
+
+    expect(screen.getByText("I am still here.")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByRole("button").getAttribute("aria-label")).toContain(
+      "I am still here."
+    );
+  });
+
+  it("uses a drawing's description for its accessible name", () => {
+    render(
+      <StickyNoteComponent
+        note={makeNote({
+          kind: "drawing",
+          altText: "A hand-drawn heart on a yellow note",
+        })}
+      />
+    );
+
+    expect(
+      screen.getByAltText("A hand-drawn heart on a yellow note")
+    ).toBeInTheDocument();
+  });
+
   it("shows a flag badge when the note has been reported", () => {
     render(<StickyNoteComponent note={makeNote({ flagCount: 2 })} />);
     expect(screen.getByTitle("Flagged 2 time(s)")).toBeInTheDocument();

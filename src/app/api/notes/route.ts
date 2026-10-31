@@ -27,6 +27,7 @@ import {
   StickyNote,
   ViewportBounds,
   ConvexNote,
+  buildSearchText,
   mapConvexNote,
   toPublicStickyNote,
   clampNoteToWall,
@@ -34,7 +35,7 @@ import {
   getMaxOverlapWithNotes,
   MAX_OVERLAP_PERCENTAGE,
 } from "@/lib/types";
-import { moderateImage } from "@/lib/moderation";
+import { moderateImage, moderateText } from "@/lib/moderation";
 import { validateCreateNoteRequest } from "@/lib/validation";
 import { checkPostAttemptRateLimit } from "@/lib/abuse";
 import { noStoreJson } from "@/lib/http";
@@ -52,6 +53,11 @@ const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=120";
 // Reject clearly oversized bodies before buffering/parsing them. The image
 // limit is 500KB decoded, ~667KB as base64, plus JSON envelope headroom.
 const MAX_REQUEST_BYTES = 800_000;
+
+// Public reads are viewport reads. A whole-wall request is bounded so a
+// single caller cannot ask the database for every note ever posted.
+const MAX_PUBLIC_RANGE_WIDTH = 20_000;
+const MAX_PUBLIC_NOTES = 500;
 
 // Initialize sample notes on first request (for dev mode only)
 let initialized = false;
@@ -135,6 +141,14 @@ export async function GET(request: NextRequest) {
   if (error) {
     return noStoreJson({ error }, 400);
   }
+  if (bounds && bounds.maxX - bounds.minX > MAX_PUBLIC_RANGE_WIDTH) {
+    return noStoreJson(
+      {
+        error: `Viewport range is too wide. Request at most ${MAX_PUBLIC_RANGE_WIDTH}px at a time.`,
+      },
+      400
+    );
+  }
 
   try {
     let notes: StickyNote[];
@@ -167,10 +181,11 @@ export async function GET(request: NextRequest) {
 
     const publicNotes = notes
       .filter((note) => note.moderationStatus === "approved")
-      .map(toPublicStickyNote);
+      .map(toPublicStickyNote)
+      .slice(0, MAX_PUBLIC_NOTES);
 
     return NextResponse.json(
-      { notes: publicNotes },
+      { notes: publicNotes, hasMore: notes.length > publicNotes.length },
       { headers: { "Cache-Control": PUBLIC_CACHE_CONTROL } }
     );
   } catch (routeError) {
@@ -230,6 +245,12 @@ export async function POST(request: NextRequest) {
       return noStoreJson({ error: validation.error }, 400);
     }
     const body = validation.value;
+
+    // Vercel adds the visitor's country at the edge. It is coarse (country,
+    // never city or IP) and only used to show how far the wall reaches.
+    const countryHeader = request.headers.get("x-vercel-ip-country")?.trim().toUpperCase();
+    const countryCode =
+      countryHeader && /^[A-Z]{2}$/.test(countryHeader) ? countryHeader : undefined;
 
     // Fail fast on server misconfiguration before doing any paid work.
     const convexConfigured = isConvexConfigured();
@@ -316,22 +337,17 @@ export async function POST(request: NextRequest) {
     // Generate note ID
     const noteId = crypto.randomUUID();
 
-    // Blob upload and AI moderation are independent (both read only the
-    // image data), so run them concurrently to cut post latency roughly in
-    // half. moderateImage never rejects — it degrades to a pending verdict.
+    // Drawing uploads and AI moderation are independent, so run them
+    // concurrently. Text notes skip Blob entirely and go straight to text
+    // moderation. Both moderators degrade to pending, never throw.
     let moderationStatus: "pending" | "approved" | "rejected" = "pending";
     let moderationReason = "";
+    const confidenceThreshold = 0.8;
 
-    try {
-      const [uploadResult, moderation] = await Promise.all([
-        uploadNoteImage(body.imageData, noteId),
-        // moderateImage degrades internally, but guard anyway: a moderation
-        // failure must leave the note pending, never abort the post.
-        moderateImage(body.imageData).catch((moderationError) => {
-          console.error(
-            "AI moderation failed, defaulting to pending:",
-            moderationError
-          );
+    if (body.kind === "text") {
+      const moderation = await moderateText(body.text ?? "").catch(
+        (moderationError) => {
+          console.error("AI text moderation failed, defaulting to pending:", moderationError);
           return {
             approved: false,
             reason: "",
@@ -339,45 +355,79 @@ export async function POST(request: NextRequest) {
             inputTokens: 0,
             outputTokens: 0,
           };
-        }),
-      ]);
-      uploadedImageUrl = uploadResult;
-
-      // Auto-approve/reject with high confidence, otherwise leave pending for manual review
-      const CONFIDENCE_THRESHOLD = 0.8;
-
-      if (moderation.confidence >= CONFIDENCE_THRESHOLD) {
+        }
+      );
+      if (moderation.confidence >= confidenceThreshold) {
         moderationStatus = moderation.approved ? "approved" : "rejected";
         moderationReason = moderation.reason;
       }
-
-      console.log("AI Moderation:", {
+      console.log("AI text moderation:", {
         noteId,
         decision: moderationStatus,
         confidence: moderation.confidence,
         reason: moderation.reason,
         tokens: { input: moderation.inputTokens, output: moderation.outputTokens },
       });
-    } catch (uploadError) {
-      console.error("Failed to upload image:", uploadError);
-      await reservation.release();
-      return noStoreJson({ error: "Failed to upload image" }, 500);
-    }
+    } else {
+      try {
+        const [uploadResult, moderation] = await Promise.all([
+          uploadNoteImage(body.imageData!, noteId),
+          moderateImage(body.imageData!).catch((moderationError) => {
+            console.error(
+              "AI moderation failed, defaulting to pending:",
+              moderationError
+            );
+            return {
+              approved: false,
+              reason: "",
+              confidence: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+            };
+          }),
+        ]);
+        uploadedImageUrl = uploadResult;
 
-    if (!uploadedImageUrl) {
-      await reservation.release();
-      return noStoreJson({ error: "Failed to upload image" }, 500);
+        if (moderation.confidence >= confidenceThreshold) {
+          moderationStatus = moderation.approved ? "approved" : "rejected";
+          moderationReason = moderation.reason;
+        }
+
+        console.log("AI Moderation:", {
+          noteId,
+          decision: moderationStatus,
+          confidence: moderation.confidence,
+          reason: moderation.reason,
+          tokens: { input: moderation.inputTokens, output: moderation.outputTokens },
+        });
+      } catch (uploadError) {
+        console.error("Failed to upload image:", uploadError);
+        await reservation.release();
+        return noStoreJson({ error: "Failed to upload image" }, 500);
+      }
+
+      if (!uploadedImageUrl) {
+        await reservation.release();
+        return noStoreJson({ error: "Failed to upload image" }, 500);
+      }
     }
 
     const rotation = Math.random() * 6 - 3;
     const createdAt = new Date().toISOString();
+    const imageUrl = uploadedImageUrl ?? "";
+    const searchText = buildSearchText({
+      text: body.text,
+      caption: body.caption,
+      altText: body.altText,
+      color: body.color,
+    });
 
     if (convexConfigured) {
       try {
         const convex = getConvexAdminClient();
         await convex.mutation(internal.notes.createNote, {
           visibleId: noteId,
-          imageUrl: uploadedImageUrl,
+          imageUrl,
           color: body.color,
           x: position.x,
           y: position.y,
@@ -386,6 +436,14 @@ export async function POST(request: NextRequest) {
           moderationStatus,
           flagCount: 0,
           sessionId,
+          kind: body.kind,
+          text: body.text,
+          caption: body.caption,
+          altText: body.altText,
+          reactionCount: 0,
+          reactionCounts: { heart: 0, hug: 0, strength: 0, metoo: 0 },
+          countryCode,
+          searchText,
         });
       } catch (convexError) {
         console.error("Convex createNote mutation failed:", convexError);
@@ -398,7 +456,7 @@ export async function POST(request: NextRequest) {
     } else {
       const note: StickyNote = {
         id: noteId,
-        imageUrl: uploadedImageUrl,
+        imageUrl,
         color: body.color,
         x: position.x,
         y: position.y,
@@ -407,19 +465,35 @@ export async function POST(request: NextRequest) {
         moderationStatus,
         flagCount: 0,
         sessionId,
+        kind: body.kind,
+        text: body.text,
+        caption: body.caption,
+        altText: body.altText,
+        reactionCount: 0,
+        reactionCounts: { heart: 0, hug: 0, strength: 0, metoo: 0 },
+        countryCode,
+        searchText,
       };
       await createNoteInMemory(note);
     }
 
-    // The note now exists, so the daily slot is spent for good: clear the
-    // reservation handle so a later incidental error can't roll it back.
+    // A rejected note should not burn the daily ritual. Return the slot so the
+    // person can try again with a different message; pending/approved notes
+    // spend it as usual.
     const reservationMode = reservation.mode;
-    reservation = null;
+    if (moderationStatus === "rejected") {
+      await reservation.release();
+      reservation = null;
+    } else {
+      // The note now exists, so the daily slot is spent for good: clear the
+      // reservation handle so a later incidental error can't roll it back.
+      reservation = null;
 
-    // Under deployment skew the atomic reservation isn't available; fall back
-    // to recording the submission after success, like the pre-reservation flow.
-    if (reservationMode === "legacy") {
-      await recordNoteSubmission();
+      // Under deployment skew the atomic reservation isn't available; fall
+      // back to recording the submission after success.
+      if (reservationMode === "legacy") {
+        await recordNoteSubmission();
+      }
     }
 
     // Generate appropriate message based on moderation status
@@ -441,7 +515,7 @@ export async function POST(request: NextRequest) {
       success: true,
       note: {
         id: noteId,
-        imageUrl: uploadedImageUrl,
+        imageUrl,
         color: body.color,
         x: position.x,
         y: position.y,
@@ -449,17 +523,31 @@ export async function POST(request: NextRequest) {
         createdAt,
         moderationStatus,
         flagCount: 0,
+        kind: body.kind,
+        text: body.text,
+        caption: body.caption,
+        altText: body.altText,
+        reactionCount: 0,
+        reactionCounts: { heart: 0, hug: 0, strength: 0, metoo: 0 },
       },
       message,
+      canPostAgain: moderationStatus === "rejected",
     });
 
     // Set session cookie on response
     const sessionCookie = getSessionCookieConfig(sessionId);
     response.cookies.set(sessionCookie.name, sessionCookie.value, sessionCookie.options);
 
-    // Record note submission cookie on response
-    const submissionCookie = getNoteSubmissionCookieConfig();
-    response.cookies.set(submissionCookie.name, submissionCookie.value, submissionCookie.options);
+    // Record the submission cookie only when the daily slot was actually
+    // spent. A rejected note keeps the ritual available.
+    if (moderationStatus !== "rejected") {
+      const submissionCookie = getNoteSubmissionCookieConfig();
+      response.cookies.set(
+        submissionCookie.name,
+        submissionCookie.value,
+        submissionCookie.options
+      );
+    }
 
     return response;
   } catch (routeError) {

@@ -64,8 +64,8 @@ describe("abuse", () => {
       });
       const result2 = await getReporterHashes("session-b");
 
-      // Same IP/UA → same dailyReporterHash
-      expect(result1.dailyReporterHash).toBe(result2.dailyReporterHash);
+      // The daily ritual follows the browser identity, not the shared network.
+      expect(result1.dailyReporterHash).not.toBe(result2.dailyReporterHash);
       // Different session → different requestKey
       expect(result1.requestKey).not.toBe(result2.requestKey);
     });

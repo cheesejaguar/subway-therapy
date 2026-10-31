@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from "react";
-import { WALL_CONFIG, ViewportBounds } from "@/lib/types";
+import React, { useCallback, useMemo, useRef, useState } from "react";
+import { StickyNote, WALL_CONFIG, ViewportBounds } from "@/lib/types";
 
 // Official MTA subway line colors
 const MTA_LINES = [
@@ -16,9 +16,12 @@ const MTA_LINES = [
 interface MinimapProps {
   viewportBounds: ViewportBounds;
   onNavigate: (x: number, y: number) => void;
+  notes?: StickyNote[];
 }
 
-export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
+const DENSITY_BUCKETS = 72;
+
+export default function Minimap({ viewportBounds, onNavigate, notes = [] }: MinimapProps) {
   const { wallWidth, wallHeight } = WALL_CONFIG;
   const containerRef = useRef<HTMLDivElement>(null);
   const sliderRef = useRef<HTMLDivElement>(null);
@@ -57,6 +60,24 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
   const sliderWidth = 220;
   const sliderHeight = 28;
   const scale = sliderWidth / wallWidth;
+
+  // A compact density profile of the loaded notes. It makes the wall's
+  // geography legible at a glance: where the crowd is, and where it is quiet.
+  const density = useMemo(() => {
+    const buckets = new Array<number>(DENSITY_BUCKETS).fill(0);
+    for (const note of notes) {
+      const index = Math.max(
+        0,
+        Math.min(
+          DENSITY_BUCKETS - 1,
+          Math.floor((note.x / wallWidth) * DENSITY_BUCKETS)
+        )
+      );
+      buckets[index] += 1;
+    }
+    return buckets;
+  }, [notes, wallWidth]);
+  const maxDensity = Math.max(1, ...density);
 
   const viewportX = Math.max(0, Math.min(sliderWidth, viewportBounds.minX * scale));
   const viewportW = Math.max(
@@ -218,6 +239,25 @@ export default function Minimap({ viewportBounds, onNavigate }: MinimapProps) {
         aria-valuenow={currentFeet}
         aria-valuetext={`${currentFeet} feet`}
       >
+        {/* Note-density profile behind the line */}
+        {density.map((count, index) => {
+          if (count === 0) return null;
+          const height = Math.max(2, (count / maxDensity) * (sliderHeight - 6));
+          return (
+            <div
+              key={`density-${index}`}
+              aria-hidden="true"
+              className="absolute bottom-[3px] rounded-sm"
+              style={{
+                left: (index / DENSITY_BUCKETS) * sliderWidth,
+                width: Math.max(1, sliderWidth / DENSITY_BUCKETS - 1),
+                height,
+                backgroundColor: "rgba(108, 190, 69, 0.45)",
+              }}
+            />
+          );
+        })}
+
         {/* Station dots along the line */}
         {[0.1, 0.25, 0.5, 0.75, 0.9].map((pos) => (
           <div
