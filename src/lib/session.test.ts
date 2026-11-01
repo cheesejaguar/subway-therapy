@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   formatTimeRemaining,
   getSessionCookieConfig,
@@ -9,24 +9,24 @@ import {
   reserveNoteSubmission,
   getReporterHash,
 } from "./session";
-import { cookies } from "next/headers";
-import * as abuse from "./abuse";
-import * as convex from "./convex";
+import { getReporterHashes } from "./abuse";
+import { LAST_NOTE_COOKIE_NAME, SESSION_COOKIE_NAME } from "./types";
+import {
+  convexBackend,
+  setRequestCookie,
+  useConvex,
+} from "@/test/fakes";
 
-vi.mock("./abuse", () => ({
-  getReporterHashes: vi.fn(() =>
-    Promise.resolve({ dailyReporterHash: "hash-abc", requestKey: "key-abc" })
-  ),
-}));
-
-vi.mock("./convex", () => ({
-  isConvexAdminConfigured: vi.fn(() => false),
-  getConvexAdminClient: vi.fn(),
-}));
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 describe("session", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe("formatTimeRemaining", () => {
@@ -101,177 +101,140 @@ describe("session", () => {
 
   describe("getOrCreateSessionId", () => {
     it("should return existing session id from cookie", async () => {
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn((name: string) =>
-          name === "subway_therapy_session" ? { name, value: "existing-session" } : undefined
-        ),
-        set: vi.fn(),
-      } as never);
+      setRequestCookie(SESSION_COOKIE_NAME, "existing-session");
 
       const sessionId = await getOrCreateSessionId();
       expect(sessionId).toBe("existing-session");
     });
 
-    it("should create a new session id when cookie is missing", async () => {
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn(() => undefined),
-        set: vi.fn(),
-      } as never);
+    it("should create a new random UUID session id when cookie is missing", async () => {
+      const first = await getOrCreateSessionId();
+      const second = await getOrCreateSessionId();
 
-      const sessionId = await getOrCreateSessionId();
-      expect(sessionId).toBe("test-uuid-1234"); // from global uuid mock
+      expect(first).toMatch(UUID_PATTERN);
+      expect(second).toMatch(UUID_PATTERN);
+      expect(first).not.toBe(second);
     });
   });
 
   describe("canUserPostNote", () => {
     it("should allow posting when no cooldown is active", async () => {
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn(() => undefined),
-        set: vi.fn(),
-      } as never);
-
       const result = await canUserPostNote();
-      expect(result.canPost).toBe(true);
+      expect(result).toEqual({ canPost: true });
     });
 
     it("should block posting when last note cookie is recent", async () => {
       const recentTime = new Date(Date.now() - 1000).toISOString(); // 1 second ago
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn((name: string) => {
-          if (name === "subway_therapy_last_note") return { name, value: recentTime };
-          return undefined;
-        }),
-        set: vi.fn(),
-      } as never);
+      setRequestCookie(LAST_NOTE_COOKIE_NAME, recentTime);
 
       const result = await canUserPostNote();
       expect(result.canPost).toBe(false);
-      expect(result.reason).toContain("one note");
-      expect(result.timeUntilNextPost).toBeGreaterThan(0);
+      expect(result.reason).toBe("Only one note per person per day!");
+      // ~24h minus the one second that already elapsed.
+      expect(result.timeUntilNextPost).toBeGreaterThan(ONE_DAY_MS - 5_000);
+      expect(result.timeUntilNextPost).toBeLessThanOrEqual(ONE_DAY_MS - 1_000);
     });
 
     it("should allow posting when last note cookie is old enough", async () => {
       const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(); // 25 hours ago
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn((name: string) => {
-          if (name === "subway_therapy_last_note") return { name, value: oldTime };
-          return undefined;
-        }),
-        set: vi.fn(),
-      } as never);
+      setRequestCookie(LAST_NOTE_COOKIE_NAME, oldTime);
 
       const result = await canUserPostNote();
       expect(result.canPost).toBe(true);
     });
 
-    it("should check Convex cooldown when configured", async () => {
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn(() => undefined),
-        set: vi.fn(),
-      } as never);
-      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
-      const mockQuery = vi.fn().mockResolvedValue({ timeUntilNextPostMs: 5000 });
-      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
-        query: mockQuery,
-        mutation: vi.fn(),
-      } as never);
+    it("should block a visitor who already reserved today even without the cookie", async () => {
+      await reserveNoteSubmission();
+
+      const result = await canUserPostNote();
+      expect(result.canPost).toBe(false);
+      expect(result.timeUntilNextPost).toBeGreaterThan(ONE_DAY_MS - 5_000);
+    });
+
+    it("should check Convex cooldown for this reporter when configured", async () => {
+      useConvex();
+      setRequestCookie(SESSION_COOKIE_NAME, "session-convex");
+      convexBackend.on("notes:getSubmissionCooldown", () => ({
+        timeUntilNextPostMs: 5000,
+      }));
 
       const result = await canUserPostNote();
       expect(result.canPost).toBe(false);
       expect(result.timeUntilNextPost).toBe(5000);
+
+      const [call] = convexBackend.callsTo("notes:getSubmissionCooldown");
+      const { dailyReporterHash } = await getReporterHashes("session-convex");
+      expect(call.adminKey).toBe("test-deploy-key");
+      expect(call.args.reporterHash).toBe(dailyReporterHash);
+      expect(typeof call.args.nowMs).toBe("number");
     });
 
-    it("should handle Convex errors gracefully", async () => {
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn(() => undefined),
-        set: vi.fn(),
-      } as never);
-      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
-      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
-        query: vi.fn().mockRejectedValue(new Error("Convex down")),
-        mutation: vi.fn(),
-      } as never);
+    it("should fail open when Convex is unavailable", async () => {
+      useConvex();
+      convexBackend.on("notes:getSubmissionCooldown", () => {
+        throw new Error("Convex down");
+      });
 
       const result = await canUserPostNote();
-      expect(result.canPost).toBe(true); // fails open
+      expect(result.canPost).toBe(true);
     });
   });
 
   describe("recordNoteSubmission", () => {
-    it("should record submission in memory", async () => {
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn(() => undefined),
-        set: vi.fn(),
-      } as never);
+    it("should record submission in memory so the visitor is on cooldown", async () => {
+      await expect(canUserPostNote()).resolves.toEqual({ canPost: true });
 
-      await expect(recordNoteSubmission()).resolves.toBeUndefined();
-      expect(abuse.getReporterHashes).toHaveBeenCalled();
+      await recordNoteSubmission();
+
+      const after = await canUserPostNote();
+      expect(after.canPost).toBe(false);
     });
 
     it("should record submission in Convex when configured", async () => {
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn(() => undefined),
-        set: vi.fn(),
-      } as never);
-      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
-      const mockMutation = vi.fn().mockResolvedValue(null);
-      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
-        query: vi.fn(),
-        mutation: mockMutation,
-      } as never);
+      useConvex();
+      setRequestCookie(SESSION_COOKIE_NAME, "session-record");
+      convexBackend.on("notes:recordSubmission", () => null);
 
       await recordNoteSubmission();
-      expect(mockMutation).toHaveBeenCalled();
+
+      const calls = convexBackend.callsTo("notes:recordSubmission");
+      const { dailyReporterHash } = await getReporterHashes("session-record");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].kind).toBe("mutation");
+      expect(calls[0].args.reporterHash).toBe(dailyReporterHash);
+      expect(Number.isNaN(Date.parse(calls[0].args.createdAt as string))).toBe(false);
     });
 
     it("should handle Convex mutation errors gracefully", async () => {
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn(() => undefined),
-        set: vi.fn(),
-      } as never);
-      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
-      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
-        query: vi.fn(),
-        mutation: vi.fn().mockRejectedValue(new Error("Convex error")),
-      } as never);
+      useConvex();
+      convexBackend.on("notes:recordSubmission", () => {
+        throw new Error("Convex error");
+      });
 
       await expect(recordNoteSubmission()).resolves.toBeUndefined();
     });
   });
 
   describe("reserveNoteSubmission", () => {
-    function mockEmptyCookies() {
-      vi.mocked(cookies).mockResolvedValue({
-        get: vi.fn(() => undefined),
-        set: vi.fn(),
-      } as never);
-    }
-
     it("reserves and then denies the second attempt in memory", async () => {
-      mockEmptyCookies();
-      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
-      vi.mocked(abuse.getReporterHashes).mockResolvedValue({
-        dailyReporterHash: "reserve-hash-1",
-        requestKey: "key",
-      });
-
       const first = await reserveNoteSubmission();
       expect(first.reserved).toBe(true);
       expect(first.mode).toBe("atomic");
 
       const second = await reserveNoteSubmission();
       expect(second.reserved).toBe(false);
-      expect(second.timeUntilNextPost).toBeGreaterThan(0);
+      expect(second.timeUntilNextPost).toBeGreaterThan(ONE_DAY_MS - 5_000);
+    });
+
+    it("keys the daily slot by session, not by shared network", async () => {
+      setRequestCookie(SESSION_COOKIE_NAME, "household-member-1");
+      expect((await reserveNoteSubmission()).reserved).toBe(true);
+
+      setRequestCookie(SESSION_COOKIE_NAME, "household-member-2");
+      expect((await reserveNoteSubmission()).reserved).toBe(true);
     });
 
     it("release() returns the daily slot in memory", async () => {
-      mockEmptyCookies();
-      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
-      vi.mocked(abuse.getReporterHashes).mockResolvedValue({
-        dailyReporterHash: "reserve-hash-2",
-        requestKey: "key",
-      });
-
       const first = await reserveNoteSubmission();
       expect(first.reserved).toBe(true);
       await first.release();
@@ -281,39 +244,34 @@ describe("session", () => {
     });
 
     it("uses the atomic Convex mutation when configured", async () => {
-      mockEmptyCookies();
-      vi.mocked(abuse.getReporterHashes).mockResolvedValue({
-        dailyReporterHash: "reserve-hash-3",
-        requestKey: "key",
-      });
-      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
-      const mockMutation = vi
-        .fn()
-        .mockResolvedValue({ reserved: true, submissionId: "sub-1" });
-      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
-        query: vi.fn(),
-        mutation: mockMutation,
-      } as never);
+      useConvex();
+      setRequestCookie(SESSION_COOKIE_NAME, "session-reserve");
+      convexBackend
+        .on("notes:reserveSubmission", () => ({ reserved: true, submissionId: "sub-1" }))
+        .on("notes:releaseSubmission", () => null);
 
       const reservation = await reserveNoteSubmission();
       expect(reservation.reserved).toBe(true);
       expect(reservation.mode).toBe("atomic");
-      expect(mockMutation).toHaveBeenCalledTimes(1);
 
-      // release() rolls back via the release mutation.
+      const [reserveCall] = convexBackend.callsTo("notes:reserveSubmission");
+      const { dailyReporterHash } = await getReporterHashes("session-reserve");
+      expect(reserveCall.args.reporterHash).toBe(dailyReporterHash);
+      expect(reserveCall.args.nowMs).toBe(Date.parse(reserveCall.args.createdAt as string));
+
+      // release() rolls back via the release mutation for that submission.
       await reservation.release();
-      expect(mockMutation).toHaveBeenCalledTimes(2);
+      expect(convexBackend.callsTo("notes:releaseSubmission")).toEqual([
+        expect.objectContaining({ args: { submissionId: "sub-1" } }),
+      ]);
     });
 
     it("propagates a Convex denial", async () => {
-      mockEmptyCookies();
-      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
-      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
-        query: vi.fn(),
-        mutation: vi
-          .fn()
-          .mockResolvedValue({ reserved: false, timeUntilNextPostMs: 5000 }),
-      } as never);
+      useConvex();
+      convexBackend.on("notes:reserveSubmission", () => ({
+        reserved: false,
+        timeUntilNextPostMs: 5000,
+      }));
 
       const reservation = await reserveNoteSubmission();
       expect(reservation.reserved).toBe(false);
@@ -321,14 +279,8 @@ describe("session", () => {
     });
 
     it("falls back to legacy mode when the mutation is unavailable", async () => {
-      mockEmptyCookies();
-      vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(true);
-      vi.mocked(convex.getConvexAdminClient).mockReturnValue({
-        query: vi.fn(),
-        mutation: vi
-          .fn()
-          .mockRejectedValue(new Error("Could not find public function")),
-      } as never);
+      useConvex();
+      // No handler registered: the fake deployment reports a missing function.
 
       const reservation = await reserveNoteSubmission();
       expect(reservation.reserved).toBe(true);
@@ -337,13 +289,11 @@ describe("session", () => {
   });
 
   describe("getReporterHash", () => {
-    it("should return the daily reporter hash", async () => {
-      vi.mocked(abuse.getReporterHashes).mockResolvedValue({
-        dailyReporterHash: "hash-abc",
-        requestKey: "key-abc",
-      });
-      const hash = await getReporterHash("session-123");
-      expect(hash).toBe("hash-abc");
+    it("should return the daily reporter hash for the session", async () => {
+      const { dailyReporterHash } = await getReporterHashes("session-123");
+
+      await expect(getReporterHash("session-123")).resolves.toBe(dailyReporterHash);
+      await expect(getReporterHash("session-456")).resolves.not.toBe(dailyReporterHash);
     });
   });
 });

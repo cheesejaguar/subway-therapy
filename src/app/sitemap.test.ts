@@ -1,13 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import sitemap from "./sitemap";
-import * as noteService from "@/lib/note-service";
-import type { PublicStickyNote } from "@/lib/types";
+import { createNote } from "@/lib/storage";
+import { useConvex } from "@/test/fakes";
+import type { StickyNote } from "@/lib/types";
 
-vi.mock("@/lib/note-service", () => ({
-  getGalleryNotes: vi.fn(),
-}));
-
-function makeNote(id: string, createdAt: string): PublicStickyNote {
+function makeNote(id: string, createdAt: string, overrides: Partial<StickyNote> = {}): StickyNote {
   return {
     id,
     imageUrl: `https://example.com/${id}.png`,
@@ -18,16 +15,19 @@ function makeNote(id: string, createdAt: string): PublicStickyNote {
     createdAt,
     moderationStatus: "approved",
     flagCount: 0,
+    ...overrides,
   };
 }
 
 describe("sitemap", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(noteService.getGalleryNotes).mockResolvedValue([]);
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("lists the wall and the public pages", async () => {
+    // A non-empty store keeps the dev sample notes out of this test.
+    await createNote(makeNote("note-hidden", "2026-10-01T12:00:00.000Z", { moderationStatus: "pending" }));
+
     const entries = await sitemap();
 
     const urls = entries.map((entry) => entry.url);
@@ -48,13 +48,13 @@ describe("sitemap", () => {
     for (const entry of entries) {
       expect(entry.url).toMatch(/^https:\/\//);
     }
+    // Unapproved notes are never advertised.
+    expect(urls.some((url) => url.includes("/note/"))).toBe(false);
   });
 
   it("includes recently approved notes with their timestamps", async () => {
-    vi.mocked(noteService.getGalleryNotes).mockResolvedValue([
-      makeNote("note-one", "2026-10-01T12:00:00.000Z"),
-      makeNote("note-two", "2026-10-02T12:00:00.000Z"),
-    ]);
+    await createNote(makeNote("note-one", "2026-10-01T12:00:00.000Z"));
+    await createNote(makeNote("note-two", "2026-10-02T12:00:00.000Z"));
 
     const entries = await sitemap();
 
@@ -65,21 +65,36 @@ describe("sitemap", () => {
       (entry) => entry.url === "https://subwaytherapy.net/note/note-two"
     );
 
-    expect(noteOne).toBeDefined();
-    expect(noteTwo).toBeDefined();
-    expect(noteOne?.lastModified).toEqual(new Date("2026-10-01T12:00:00.000Z"));
-    expect(noteOne?.priority).toBe(0.6);
-    expect(noteService.getGalleryNotes).toHaveBeenCalledWith({ limit: 100 });
+    expect(noteOne).toEqual({
+      url: "https://subwaytherapy.net/note/note-one",
+      lastModified: new Date("2026-10-01T12:00:00.000Z"),
+      changeFrequency: "yearly",
+      priority: 0.6,
+    });
+    expect(noteTwo?.lastModified).toEqual(new Date("2026-10-02T12:00:00.000Z"));
+  });
+
+  it("caps note entries at the 100 most recent approved notes", async () => {
+    for (let i = 0; i < 105; i++) {
+      await createNote(makeNote(`note-${i}`, new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString()));
+    }
+
+    const entries = await sitemap();
+    const noteUrls = entries.filter((entry) => entry.url.includes("/note/")).map((e) => e.url);
+
+    expect(noteUrls).toHaveLength(100);
+    expect(noteUrls).toContain("https://subwaytherapy.net/note/note-104");
+    expect(noteUrls).not.toContain("https://subwaytherapy.net/note/note-0");
   });
 
   it("still returns the static pages when note lookup fails", async () => {
-    vi.mocked(noteService.getGalleryNotes).mockRejectedValue(
-      new Error("storage unavailable")
-    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Convex configured but unreachable: every query fails.
+    useConvex({ admin: false });
 
     const entries = await sitemap();
 
-    expect(entries.length).toBeGreaterThanOrEqual(9);
+    expect(entries).toHaveLength(9);
     expect(entries.some((entry) => entry.url.includes("/note/"))).toBe(false);
   });
 });

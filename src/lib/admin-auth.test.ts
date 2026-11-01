@@ -10,7 +10,7 @@ import {
   clearAdminSessionCookie,
   ADMIN_SESSION_COOKIE_NAME,
 } from "./admin-auth";
-import { cookies } from "next/headers";
+import { requestContext } from "@/test/fakes";
 import { NextRequest } from "next/server";
 
 describe("admin-auth", () => {
@@ -74,8 +74,13 @@ describe("admin-auth", () => {
 
     it("should fall back to ADMIN_API_KEY when ADMIN_SESSION_SECRET is not set", () => {
       delete process.env.ADMIN_SESSION_SECRET;
-      const token = createAdminSessionToken();
-      expect(token).not.toBeNull();
+      const token = createAdminSessionToken()!;
+      expect(token).toMatch(/^\d+\.[A-Za-z0-9_-]+$/);
+      // Signed with ADMIN_API_KEY: valid while that is the only secret...
+      expect(isAdminSessionValid(token)).toBe(true);
+      // ...and invalid once a different dedicated signing secret exists.
+      process.env.ADMIN_SESSION_SECRET = "a-different-secret";
+      expect(isAdminSessionValid(token)).toBe(false);
     });
   });
 
@@ -123,37 +128,35 @@ describe("admin-auth", () => {
 
   describe("setAdminSessionCookie", () => {
     it("should set cookie with correct options", async () => {
-      const mockSet = vi.fn();
-      vi.mocked(cookies).mockResolvedValue({ get: vi.fn(), set: mockSet } as never);
-
       await setAdminSessionCookie("test-token");
 
-      expect(mockSet).toHaveBeenCalledWith(
-        ADMIN_SESSION_COOKIE_NAME,
-        "test-token",
-        expect.objectContaining({
-          httpOnly: true,
-          sameSite: "strict",
-          path: "/",
-        })
-      );
+      expect(requestContext.setCookies).toEqual([
+        {
+          name: ADMIN_SESSION_COOKIE_NAME,
+          value: "test-token",
+          options: {
+            httpOnly: true,
+            secure: false,
+            sameSite: "strict",
+            maxAge: 60 * 60 * 8,
+            path: "/",
+          },
+        },
+      ]);
     });
   });
 
   describe("clearAdminSessionCookie", () => {
     it("should set cookie with maxAge 0", async () => {
-      const mockSet = vi.fn();
-      vi.mocked(cookies).mockResolvedValue({ get: vi.fn(), set: mockSet } as never);
-
       await clearAdminSessionCookie();
 
-      expect(mockSet).toHaveBeenCalledWith(
-        ADMIN_SESSION_COOKIE_NAME,
-        "",
+      expect(requestContext.setCookies).toEqual([
         expect.objectContaining({
-          maxAge: 0,
-        })
-      );
+          name: ADMIN_SESSION_COOKIE_NAME,
+          value: "",
+          options: expect.objectContaining({ maxAge: 0, httpOnly: true }),
+        }),
+      ]);
     });
   });
 

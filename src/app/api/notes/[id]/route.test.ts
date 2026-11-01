@@ -1,14 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { GET } from "./route";
 import { createMockRequest, parseResponse } from "@/test/api-helpers";
-import * as noteService from "@/lib/note-service";
-import type { PublicStickyNote } from "@/lib/types";
+import { convexBackend, useConvex } from "@/test/fakes";
+import { createNote } from "@/lib/storage";
+import type { PublicStickyNote, StickyNote } from "@/lib/types";
 
-vi.mock("@/lib/note-service", () => ({
-  getApprovedNoteById: vi.fn(),
-}));
-
-const note: PublicStickyNote = {
+const publicNote: PublicStickyNote = {
   id: "note-0001",
   imageUrl: "",
   color: "yellow",
@@ -21,68 +18,90 @@ const note: PublicStickyNote = {
   kind: "text",
   text: "Still here.",
 };
+const note: StickyNote = {
+  ...publicNote,
+  sessionId: "private-session",
+  searchText: "still here",
+};
 
 function params(id: string) {
   return { params: Promise.resolve({ id }) };
 }
 
+function getNoteById(id: string) {
+  return GET(createMockRequest(`http://localhost:3000/api/notes/${id}`), params(id));
+}
+
 describe("GET /api/notes/[id]", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("returns an approved note with a short public cache", async () => {
-    vi.mocked(noteService.getApprovedNoteById).mockResolvedValue(note);
+    await createNote(note);
 
-    const response = await GET(
-      createMockRequest("http://localhost:3000/api/notes/note-0001"),
-      params("note-0001")
-    );
+    const response = await getNoteById("note-0001");
     const data = await parseResponse<{ note: PublicStickyNote }>(response);
 
     expect(response.status).toBe(200);
-    expect(data.note).toEqual(note);
-    expect(response.headers.get("Cache-Control")).toContain("s-maxage=30");
-    expect(noteService.getApprovedNoteById).toHaveBeenCalledWith("note-0001");
+    expect(data.note).toEqual(publicNote);
+    expect(response.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=30, stale-while-revalidate=120"
+    );
   });
 
-  it("rejects an invalid note id", async () => {
-    const response = await GET(
-      createMockRequest("http://localhost:3000/api/notes/bad"),
-      params("bad")
-    );
+  it("rejects an invalid note id without touching storage", async () => {
+    useConvex({ admin: false });
+
+    const response = await getNoteById("bad");
     const data = await parseResponse<{ error: string }>(response);
 
     expect(response.status).toBe(400);
     expect(data.error).toContain("Invalid note ID");
-    expect(noteService.getApprovedNoteById).not.toHaveBeenCalled();
+    expect(convexBackend.calls).toEqual([]);
   });
 
   it("returns 404 when the note is missing or unapproved", async () => {
-    vi.mocked(noteService.getApprovedNoteById).mockResolvedValue(null);
+    await createNote({ ...note, id: "pending-0001", moderationStatus: "pending" });
 
-    const response = await GET(
-      createMockRequest("http://localhost:3000/api/notes/note-0001"),
-      params("note-0001")
-    );
+    expect((await getNoteById("missing-0001")).status).toBe(404);
+
+    const response = await getNoteById("pending-0001");
     const data = await parseResponse<{ error: string }>(response);
-
     expect(response.status).toBe(404);
     expect(data.error).toBe("Note not found");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  it("returns 500 when the note lookup fails", async () => {
-    vi.mocked(noteService.getApprovedNoteById).mockRejectedValue(
-      new Error("storage down")
-    );
+  it("reads the note from Convex by its visible id", async () => {
+    useConvex({ admin: false });
+    convexBackend.on("notes:getApprovedNoteByVisibleId", (args) => ({
+      visibleId: args.visibleId,
+      imageUrl: "",
+      color: "yellow",
+      x: 100,
+      y: 200,
+      rotation: 0,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      moderationStatus: "approved",
+      flagCount: 0,
+      sessionId: "private",
+    }));
 
-    const response = await GET(
-      createMockRequest("http://localhost:3000/api/notes/note-0001"),
-      params("note-0001")
-    );
-    const data = await parseResponse<{ error: string }>(response);
+    const response = await getNoteById("note-0001");
+    const data = await parseResponse<{ note: PublicStickyNote }>(response);
 
-    expect(response.status).toBe(500);
-    expect(data.error).toBe("Failed to fetch note");
+    expect(response.status).toBe(200);
+    expect(data.note.id).toBe("note-0001");
+    expect(data.note).not.toHaveProperty("sessionId");
+  });
+
+  it("returns 404 when the Convex lookup fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    useConvex({ admin: false });
+
+    const response = await getNoteById("note-0001");
+
+    expect(response.status).toBe(404);
   });
 });

@@ -1,46 +1,63 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { del } from "@vercel/blob";
 import { POST, PUT } from "./route";
-import { createMockRequest, parseResponse } from "@/test/api-helpers";
-import * as storage from "@/lib/storage";
-import * as convex from "@/lib/convex";
-import * as adminAuth from "@/lib/admin-auth";
+import {
+  createMockRequest,
+  parseResponse,
+  signedInAdminCookies,
+} from "@/test/api-helpers";
+import { convexBackend, useConvex } from "@/test/fakes";
+import { ADMIN_SESSION_COOKIE_NAME } from "@/lib/admin-auth";
+import { createNote, getNote } from "@/lib/storage";
+import type { StickyNote } from "@/lib/types";
 
-vi.mock("@/lib/storage", () => ({
-  moderateNote: vi.fn(),
-  deleteNote: vi.fn(),
-  getNote: vi.fn(),
-}));
+const URL = "http://localhost:3000/api/admin/moderate";
 
-vi.mock("@/lib/convex", () => ({
-  isConvexConfigured: vi.fn(),
-  isConvexAdminConfigured: vi.fn(),
-  getConvexAdminClient: vi.fn(),
-}));
+function makeNote(id: string, overrides: Partial<StickyNote> = {}): StickyNote {
+  return {
+    id,
+    imageUrl: "",
+    color: "yellow",
+    x: 0,
+    y: 0,
+    rotation: 0,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    moderationStatus: "pending",
+    flagCount: 0,
+    ...overrides,
+  };
+}
 
-vi.mock("@/lib/admin-auth", () => ({
-  isAdminConfigured: vi.fn(),
-  isAdminRequestAuthenticated: vi.fn(),
-  isSafeAdminOrigin: vi.fn(),
-}));
+let adminCookies: Record<string, string>;
+
+function adminRequest(
+  method: "POST" | "PUT",
+  body: unknown,
+  options: { cookies?: Record<string, string>; headers?: Record<string, string> } = {}
+) {
+  return createMockRequest(URL, {
+    method,
+    body,
+    cookies: options.cookies ?? adminCookies,
+    headers: options.headers ?? { origin: "http://localhost:3000" },
+  });
+}
+
+beforeEach(() => {
+  adminCookies = signedInAdminCookies();
+  vi.mocked(del).mockClear();
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.stubEnv("NODE_ENV", "test");
+});
 
 describe("POST /api/admin/moderate", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(convex.isConvexConfigured).mockReturnValue(false);
-    vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
-    vi.mocked(adminAuth.isAdminConfigured).mockReturnValue(true);
-    vi.mocked(adminAuth.isAdminRequestAuthenticated).mockReturnValue(true);
-    vi.mocked(adminAuth.isSafeAdminOrigin).mockReturnValue(true);
-  });
-
   it("should return 400 if noteId is missing", async () => {
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "POST",
-      body: { action: "approve" },
-      headers: { origin: "http://localhost:3000" },
-    });
-
-    const response = await POST(request);
+    const response = await POST(adminRequest("POST", { action: "approve" }));
     const data = await parseResponse<{ error: string }>(response);
 
     expect(response.status).toBe(400);
@@ -48,15 +65,7 @@ describe("POST /api/admin/moderate", () => {
   });
 
   it("should return 404 if note does not exist", async () => {
-    vi.mocked(storage.getNote).mockResolvedValue(null);
-
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "POST",
-      body: { noteId: "test-note", action: "approve" },
-      headers: { origin: "http://localhost:3000" },
-    });
-
-    const response = await POST(request);
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "approve" }));
     const data = await parseResponse<{ error: string }>(response);
 
     expect(response.status).toBe(404);
@@ -64,173 +73,161 @@ describe("POST /api/admin/moderate", () => {
   });
 
   it("should approve a note", async () => {
-    vi.mocked(storage.getNote).mockResolvedValue({
-      id: "test-note",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "pending",
-      flagCount: 0,
-    });
-    vi.mocked(storage.moderateNote).mockResolvedValue({
-      id: "test-note",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "approved",
-      flagCount: 0,
-    });
+    await createNote(makeNote("test-note"));
 
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "POST",
-      body: { noteId: "test-note", action: "approve" },
-      headers: { origin: "http://localhost:3000" },
-    });
-
-    const response = await POST(request);
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "approve" }));
     const data = await parseResponse<{ success: boolean }>(response);
 
     expect(response.status).toBe(200);
     expect(data.success).toBe(true);
-    expect(storage.moderateNote).toHaveBeenCalledWith("test-note", "approved");
+    expect((await getNote("test-note"))?.moderationStatus).toBe("approved");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("should reject a note", async () => {
-    vi.mocked(storage.getNote).mockResolvedValue({
-      id: "test-note",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "pending",
-      flagCount: 0,
-    });
-    vi.mocked(storage.moderateNote).mockResolvedValue({
-      id: "test-note",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "rejected",
-      flagCount: 0,
-    });
+    await createNote(makeNote("test-note", { moderationStatus: "approved" }));
 
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "POST",
-      body: { noteId: "test-note", action: "reject" },
-      headers: { origin: "http://localhost:3000" },
-    });
-
-    const response = await POST(request);
-    const data = await parseResponse<{ success: boolean }>(response);
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "reject" }));
 
     expect(response.status).toBe(200);
-    expect(data.success).toBe(true);
-    expect(storage.moderateNote).toHaveBeenCalledWith("test-note", "rejected");
+    expect((await getNote("test-note"))?.moderationStatus).toBe("rejected");
   });
 
-  it("should delete a note", async () => {
-    vi.mocked(storage.getNote).mockResolvedValue({
-      id: "test-note",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "pending",
-      flagCount: 0,
-    });
-    vi.mocked(storage.deleteNote).mockResolvedValue(true);
+  it("should delete a note and its stored image", async () => {
+    process.env.BLOB_READ_WRITE_TOKEN = "test-blob-token";
+    await createNote(
+      makeNote("test-note", { imageUrl: "https://blob.test/notes/test-note.png" })
+    );
 
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "POST",
-      body: { noteId: "test-note", action: "delete" },
-      headers: { origin: "http://localhost:3000" },
-    });
-
-    const response = await POST(request);
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "delete" }));
     const data = await parseResponse<{ success: boolean }>(response);
 
     expect(response.status).toBe(200);
     expect(data.success).toBe(true);
-    expect(storage.deleteNote).toHaveBeenCalledWith("test-note");
+    expect(await getNote("test-note")).toBeNull();
+    expect(del).toHaveBeenCalledWith("https://blob.test/notes/test-note.png");
+  });
+
+  it("should moderate through Convex when configured", async () => {
+    useConvex();
+    convexBackend.on("notes:moderateNote", () => ({ success: true }));
+
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "reject" }));
+
+    expect(response.status).toBe(200);
+    expect(convexBackend.callsTo("notes:moderateNote")).toEqual([
+      expect.objectContaining({
+        adminKey: "test-deploy-key",
+        args: { visibleId: "test-note", status: "rejected" },
+      }),
+    ]);
+  });
+
+  it("should return 404 when Convex cannot find the note", async () => {
+    useConvex();
+    convexBackend.on("notes:moderateNote", () => null);
+
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "approve" }));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("should delete the blob returned by the Convex delete mutation", async () => {
+    useConvex();
+    process.env.BLOB_READ_WRITE_TOKEN = "test-blob-token";
+    convexBackend.on("notes:deleteNote", () => ({
+      success: true,
+      imageUrl: "https://blob.test/notes/test-note.png",
+    }));
+
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "delete" }));
+
+    expect(response.status).toBe(200);
+    expect(convexBackend.callsTo("notes:deleteNote")[0].args).toEqual({ visibleId: "test-note" });
+    expect(del).toHaveBeenCalledWith("https://blob.test/notes/test-note.png");
+  });
+
+  it("should return 404 when the Convex delete finds nothing", async () => {
+    useConvex();
+    convexBackend.on("notes:deleteNote", () => ({ success: false }));
+
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "delete" }));
+
+    expect(response.status).toBe(404);
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("should return 500 when Convex fails", async () => {
+    useConvex();
+    convexBackend.on("notes:moderateNote", () => {
+      throw new Error("Convex down");
+    });
+
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "approve" }));
+    const data = await parseResponse<{ error: string }>(response);
+
+    expect(response.status).toBe(500);
+    expect(data.error).toBe("Failed to moderate note");
   });
 
   it("should return 503 when admin is not configured", async () => {
-    vi.mocked(adminAuth.isAdminConfigured).mockReturnValue(false);
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "POST",
-      body: { noteId: "test-note", action: "approve" },
-      headers: { origin: "http://localhost:3000" },
-    });
+    delete process.env.ADMIN_API_KEY;
 
-    const response = await POST(request);
+    const response = await POST(adminRequest("POST", { noteId: "test-note", action: "approve" }));
     const data = await parseResponse<{ error: string }>(response);
 
     expect(response.status).toBe(503);
-    expect(data.error).toContain("not configured");
+    expect(data.error).toBe("Admin authentication is not configured");
   });
 
-  it("should return 401 when unauthorized", async () => {
-    vi.mocked(adminAuth.isAdminRequestAuthenticated).mockReturnValue(false);
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "POST",
-      body: { noteId: "test-note", action: "approve" },
-      headers: { origin: "http://localhost:3000" },
-    });
+  it("should return 401 without an admin session", async () => {
+    await createNote(makeNote("test-note"));
 
-    const response = await POST(request);
+    const response = await POST(
+      adminRequest("POST", { noteId: "test-note", action: "approve" }, { cookies: {} })
+    );
     const data = await parseResponse<{ error: string }>(response);
 
     expect(response.status).toBe(401);
     expect(data.error).toBe("Unauthorized");
+    expect((await getNote("test-note"))?.moderationStatus).toBe("pending");
   });
 
-  it("should return 403 for invalid origin", async () => {
-    vi.mocked(adminAuth.isSafeAdminOrigin).mockReturnValue(false);
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "POST",
-      body: { noteId: "test-note", action: "approve" },
-      headers: { origin: "http://malicious.example" },
-    });
+  it("should return 401 for a forged admin session", async () => {
+    const [expiresAt] = adminCookies[ADMIN_SESSION_COOKIE_NAME].split(".");
+    const response = await POST(
+      adminRequest(
+        "POST",
+        { noteId: "test-note", action: "approve" },
+        { cookies: { [ADMIN_SESSION_COOKIE_NAME]: `${expiresAt}.forged-signature` } }
+      )
+    );
 
-    const response = await POST(request);
+    expect(response.status).toBe(401);
+  });
+
+  it("should return 403 for a cross-site origin in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    await createNote(makeNote("test-note"));
+
+    const response = await POST(
+      adminRequest(
+        "POST",
+        { noteId: "test-note", action: "approve" },
+        { headers: { origin: "http://malicious.example" } }
+      )
+    );
     const data = await parseResponse<{ error: string }>(response);
 
     expect(response.status).toBe(403);
     expect(data.error).toBe("Invalid request origin");
+    expect((await getNote("test-note"))?.moderationStatus).toBe("pending");
   });
 });
 
 describe("PUT /api/admin/moderate (batch)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(convex.isConvexConfigured).mockReturnValue(false);
-    vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
-    vi.mocked(adminAuth.isAdminConfigured).mockReturnValue(true);
-    vi.mocked(adminAuth.isAdminRequestAuthenticated).mockReturnValue(true);
-    vi.mocked(adminAuth.isSafeAdminOrigin).mockReturnValue(true);
-  });
-
   it("should return 400 if noteIds is missing", async () => {
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "PUT",
-      body: { action: "approve" },
-      headers: { origin: "http://localhost:3000" },
-    });
-
-    const response = await PUT(request);
+    const response = await PUT(adminRequest("PUT", { action: "approve" }));
     const data = await parseResponse<{ error: string }>(response);
 
     expect(response.status).toBe(400);
@@ -238,99 +235,88 @@ describe("PUT /api/admin/moderate (batch)", () => {
   });
 
   it("should batch approve notes", async () => {
-    vi.mocked(storage.getNote).mockResolvedValue({
-      id: "test",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "pending",
-      flagCount: 0,
-    });
-    vi.mocked(storage.moderateNote).mockResolvedValue({
-      id: "test",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "approved",
-      flagCount: 0,
-    });
+    await createNote(makeNote("note-0001"));
+    await createNote(makeNote("note-0002"));
 
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "PUT",
-      body: { noteIds: ["note-0001", "note-0002"], action: "approve" },
-      headers: { origin: "http://localhost:3000" },
-    });
-
-    const response = await PUT(request);
+    const response = await PUT(
+      adminRequest("PUT", { noteIds: ["note-0001", "note-0002"], action: "approve" })
+    );
     const data = await parseResponse<{
       success: boolean;
       results: Array<{ noteId: string; success: boolean }>;
     }>(response);
 
     expect(response.status).toBe(200);
-    expect(data.success).toBe(true);
-    expect(data.results).toHaveLength(2);
-    expect(data.results.every((result) => result.success)).toBe(true);
+    expect(data).toEqual({
+      success: true,
+      results: [
+        { noteId: "note-0001", success: true },
+        { noteId: "note-0002", success: true },
+      ],
+    });
+    expect((await getNote("note-0001"))?.moderationStatus).toBe("approved");
+    expect((await getNote("note-0002"))?.moderationStatus).toBe("approved");
+  });
+
+  it("should batch delete notes", async () => {
+    await createNote(makeNote("note-0001"));
+
+    const response = await PUT(adminRequest("PUT", { noteIds: ["note-0001"], action: "delete" }));
+
+    expect(response.status).toBe(200);
+    expect(await getNote("note-0001")).toBeNull();
   });
 
   it("should report partial failures", async () => {
-    vi.mocked(storage.getNote)
-      .mockResolvedValueOnce({
-        id: "note-0001",
-        imageUrl: "",
-        color: "yellow",
-        x: 0,
-        y: 0,
-        rotation: 0,
-        createdAt: "",
-        moderationStatus: "pending",
-        flagCount: 0,
-      })
-      .mockResolvedValueOnce(null);
-    vi.mocked(storage.moderateNote).mockResolvedValue({
-      id: "note-1",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "approved",
-      flagCount: 0,
-    });
+    await createNote(makeNote("note-0001"));
 
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "PUT",
-      body: { noteIds: ["note-0001", "note-0002"], action: "approve" },
-      headers: { origin: "http://localhost:3000" },
-    });
-
-    const response = await PUT(request);
+    const response = await PUT(
+      adminRequest("PUT", { noteIds: ["note-0001", "note-0002"], action: "reject" })
+    );
     const data = await parseResponse<{
       success: boolean;
-      results: Array<{ noteId: string; success: boolean }>;
+      results: Array<{ noteId: string; success: boolean; error?: string }>;
     }>(response);
 
     expect(response.status).toBe(200);
     expect(data.success).toBe(false);
-    expect(data.results.find((result) => result.noteId === "note-0002")?.success).toBe(false);
+    expect(data.results).toEqual([
+      { noteId: "note-0001", success: true },
+      { noteId: "note-0002", success: false, error: "Note not found" },
+    ]);
+    expect((await getNote("note-0001"))?.moderationStatus).toBe("rejected");
   });
 
-  it("should return 401 when unauthorized", async () => {
-    vi.mocked(adminAuth.isAdminRequestAuthenticated).mockReturnValue(false);
-    const request = createMockRequest("http://localhost:3000/api/admin/moderate", {
-      method: "PUT",
-      body: { noteIds: ["note-0001"], action: "approve" },
-      headers: { origin: "http://localhost:3000" },
+  it("should batch moderate through Convex and isolate per-note failures", async () => {
+    useConvex();
+    convexBackend.on("notes:moderateNote", (args) => {
+      if (args.visibleId === "note-0002") throw new Error("Convex hiccup");
+      return args.visibleId === "note-0001" ? { success: true } : null;
     });
 
-    const response = await PUT(request);
+    const response = await PUT(
+      adminRequest("PUT", {
+        noteIds: ["note-0001", "note-0002", "note-0003"],
+        action: "approve",
+      })
+    );
+    const data = await parseResponse<{
+      success: boolean;
+      results: Array<{ noteId: string; success: boolean; error?: string }>;
+    }>(response);
+
+    expect(data.success).toBe(false);
+    expect(data.results).toEqual([
+      { noteId: "note-0001", success: true },
+      { noteId: "note-0002", success: false, error: "Failed to process" },
+      { noteId: "note-0003", success: false },
+    ]);
+  });
+
+  it("should return 401 without an admin session", async () => {
+    const response = await PUT(
+      adminRequest("PUT", { noteIds: ["note-0001"], action: "approve" }, { cookies: {} })
+    );
     const data = await parseResponse<{ error: string }>(response);
 
     expect(response.status).toBe(401);

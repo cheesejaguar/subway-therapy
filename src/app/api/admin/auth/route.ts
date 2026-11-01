@@ -9,6 +9,7 @@ import {
   isSafeAdminOrigin,
   setAdminSessionCookie,
 } from "@/lib/admin-auth";
+import { checkAdminLoginRateLimit } from "@/lib/abuse";
 
 function configurationErrorResponse() {
   return noStoreJson({ error: "Admin authentication is not configured" }, 503);
@@ -31,6 +32,18 @@ export async function POST(request: NextRequest) {
 
   if (!isSafeAdminOrigin(request)) {
     return noStoreJson({ error: "Invalid request origin" }, 403);
+  }
+
+  // Stop password-guessing bursts before the password is ever compared.
+  const loginRateLimit = await checkAdminLoginRateLimit();
+  if (!loginRateLimit.allowed) {
+    return noStoreJson(
+      {
+        error: "Too many login attempts. Please wait before trying again.",
+        retryAfterMs: loginRateLimit.retryAfterMs,
+      },
+      429
+    );
   }
 
   let payload: unknown;
