@@ -21,11 +21,8 @@ import {
   initializeSampleNotes,
 } from "./storage";
 import { StickyNote, WALL_CONFIG } from "./types";
-
-// Mock the blob module
-vi.mock("./blob", () => ({
-  deleteNoteImage: vi.fn(() => Promise.resolve()),
-}));
+// Vercel Blob (third-party API) is mocked globally in src/test/setup.ts.
+import { del } from "@vercel/blob";
 
 // Helper to create a test note
 function createTestNote(overrides: Partial<StickyNote> = {}): StickyNote {
@@ -166,6 +163,36 @@ describe("storage", () => {
     it("should return false for non-existent note", async () => {
       const result = await deleteNote("non-existent");
       expect(result).toBe(false);
+    });
+
+    it("should delete the note's image from Blob storage", async () => {
+      process.env.BLOB_READ_WRITE_TOKEN = "test-blob-token"; // reset by src/test/setup.ts
+      vi.mocked(del).mockClear();
+      const note = createTestNote({
+        id: "delete-test-blob",
+        imageUrl: "https://blob.test/notes/delete-test-blob.png",
+      });
+      await createNote(note);
+
+      await deleteNote(note.id);
+
+      expect(del).toHaveBeenCalledWith("https://blob.test/notes/delete-test-blob.png");
+    });
+
+    it("should forget flags and reactions for a deleted note", async () => {
+      const note = createTestNote({ id: "delete-test-state", imageUrl: "" });
+      await createNote(note);
+      await flagNote(note.id, "reporter-1", "Spam");
+      await addReaction(note.id, "reporter-1", "heart");
+
+      await deleteNote(note.id);
+      await createNote(note);
+
+      expect(await getFlagReasons(note.id)).toEqual([]);
+      const flagAgain = await flagNote(note.id, "reporter-1");
+      expect(flagAgain.duplicate).toBe(false);
+      const reactAgain = await addReaction(note.id, "reporter-1", "heart");
+      expect(reactAgain?.duplicate).toBe(false);
     });
   });
 
@@ -638,8 +665,8 @@ describe("storage", () => {
 
       const notes = await getAllNotes();
 
-      expect(notes.length).toBeGreaterThan(0);
-      expect(notes.some((n) => n.id.startsWith("sample-"))).toBe(true);
+      expect(notes).toHaveLength(8);
+      expect(notes.every((n) => n.id.startsWith("sample-"))).toBe(true);
     });
 
     it("should not create duplicates when called multiple times", async () => {

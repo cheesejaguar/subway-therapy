@@ -1,260 +1,221 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { GET } from "./route";
-import { createMockRequest, parseResponse } from "@/test/api-helpers";
-import * as storage from "@/lib/storage";
-import * as convex from "@/lib/convex";
-import * as adminAuth from "@/lib/admin-auth";
-import type { StickyNote } from "@/lib/types";
+import {
+  createMockRequest,
+  parseResponse,
+  signedInAdminCookies,
+} from "@/test/api-helpers";
+import { convexBackend, useConvex } from "@/test/fakes";
+import { createNote, flagNote } from "@/lib/storage";
+import type { ConvexNote, StickyNote } from "@/lib/types";
 
-vi.mock("@/lib/storage", () => ({
-  getNotesForModeration: vi.fn(),
-  getStats: vi.fn(),
-  getFlagReasons: vi.fn(),
-}));
+function makeNote(id: string, overrides: Partial<StickyNote> = {}): StickyNote {
+  return {
+    id,
+    imageUrl: `https://example.com/${id}.png`,
+    color: "yellow",
+    x: 100,
+    y: 200,
+    rotation: 0,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    moderationStatus: "pending",
+    flagCount: 0,
+    ...overrides,
+  };
+}
 
-vi.mock("@/lib/convex", () => ({
-  isConvexConfigured: vi.fn(),
-  isConvexAdminConfigured: vi.fn(),
-  getConvexAdminClient: vi.fn(),
-}));
+function makeConvexNote(visibleId: string, overrides: Partial<ConvexNote> = {}): ConvexNote {
+  return {
+    visibleId,
+    imageUrl: `https://example.com/${visibleId}.png`,
+    color: "yellow",
+    x: 100,
+    y: 200,
+    rotation: 0,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    moderationStatus: "pending",
+    flagCount: 0,
+    sessionId: "internal-session-id",
+    ...overrides,
+  };
+}
 
-vi.mock("@/lib/admin-auth", () => ({
-  isAdminConfigured: vi.fn(),
-  isAdminRequestAuthenticated: vi.fn(),
-}));
+type AdminNotesResponse = {
+  notes: Array<StickyNote & { reportReasons: string[] }>;
+  stats: Record<string, number>;
+  error?: string;
+};
+
+let adminCookies: Record<string, string>;
+
+function getNotes(query = "", cookies = adminCookies) {
+  return GET(createMockRequest(`http://localhost:3000/api/admin/notes${query}`, { cookies }));
+}
 
 describe("GET /api/admin/notes", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(adminAuth.isAdminConfigured).mockReturnValue(true);
-    vi.mocked(adminAuth.isAdminRequestAuthenticated).mockReturnValue(true);
-    vi.mocked(convex.isConvexConfigured).mockReturnValue(false);
-    vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
+    adminCookies = signedInAdminCookies();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("should return 503 when admin auth is not configured", async () => {
-    vi.mocked(adminAuth.isAdminConfigured).mockReturnValue(false);
-    const request = createMockRequest("http://localhost:3000/api/admin/notes");
+    delete process.env.ADMIN_API_KEY;
 
-    const response = await GET(request);
-    const data = await parseResponse<{ error: string }>(response);
+    const response = await getNotes();
+    const data = await parseResponse<AdminNotesResponse>(response);
 
     expect(response.status).toBe(503);
-    expect(data.error).toContain("not configured");
+    expect(data.error).toBe("Admin authentication is not configured");
   });
 
   it("should return 401 when request is not authenticated", async () => {
-    vi.mocked(adminAuth.isAdminRequestAuthenticated).mockReturnValue(false);
-    const request = createMockRequest("http://localhost:3000/api/admin/notes");
-
-    const response = await GET(request);
-    const data = await parseResponse<{ error: string }>(response);
+    const response = await getNotes("", {});
+    const data = await parseResponse<AdminNotesResponse>(response);
 
     expect(response.status).toBe(401);
     expect(data.error).toBe("Unauthorized");
   });
 
-  it("should return notes and stats", async () => {
-    const mockNotes: StickyNote[] = [
-      {
-        id: "note-1",
-        imageUrl: "https://example.com/1.png",
-        color: "yellow",
-        x: 100,
-        y: 200,
-        rotation: 0,
-        createdAt: "2024-01-01T00:00:00.000Z",
-        moderationStatus: "pending",
-        flagCount: 0,
-      },
-    ];
-    const mockStats = {
-      total: 1,
-      pending: 1,
-      approved: 0,
-      rejected: 0,
-      flagged: 0,
-    };
+  it("should return 401 for an expired admin session", async () => {
+    vi.useFakeTimers();
+    try {
+      const cookies = signedInAdminCookies();
+      vi.advanceTimersByTime(8 * 60 * 60 * 1000 + 1);
+      const response = await getNotes("", cookies);
+      expect(response.status).toBe(401);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    vi.mocked(storage.getNotesForModeration).mockResolvedValue(mockNotes);
-    vi.mocked(storage.getStats).mockResolvedValue(mockStats);
+  it("should return notes and stats without private fields", async () => {
+    await createNote(makeNote("note-1", { sessionId: "internal-session-id" }));
+    await createNote(makeNote("note-2", { moderationStatus: "approved" }));
 
-    const request = createMockRequest("http://localhost:3000/api/admin/notes");
-    const response = await GET(request);
-    const data = await parseResponse<{
-      notes: typeof mockNotes;
-      stats: typeof mockStats;
-    }>(response);
+    const response = await getNotes();
+    const data = await parseResponse<AdminNotesResponse>(response);
 
     expect(response.status).toBe(200);
-    expect(data.notes).toEqual(
-      mockNotes.map((note) => ({ ...note, reportReasons: [] }))
-    );
-    expect(data.stats).toEqual(mockStats);
+    expect(data.notes.map((note) => note.id)).toEqual(["note-1", "note-2"]);
+    expect(data.notes[0]).toEqual({ ...makeNote("note-1"), reportReasons: [] });
+    expect("sessionId" in data.notes[0]).toBe(false);
+    expect(data.stats).toEqual({ total: 2, pending: 1, approved: 1, rejected: 0, flagged: 0 });
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  it("should strip sessionId from returned notes", async () => {
-    vi.mocked(storage.getNotesForModeration).mockResolvedValue([
-      {
-        id: "note-1",
-        imageUrl: "https://example.com/1.png",
-        color: "yellow",
-        x: 100,
-        y: 200,
-        rotation: 0,
-        createdAt: "2024-01-01T00:00:00.000Z",
-        moderationStatus: "pending",
-        flagCount: 0,
-        sessionId: "internal-session-id",
-      },
-    ]);
-    vi.mocked(storage.getStats).mockResolvedValue({
-      total: 1,
-      pending: 1,
-      approved: 0,
-      rejected: 0,
-      flagged: 0,
-    });
-
-    const request = createMockRequest("http://localhost:3000/api/admin/notes");
-    const response = await GET(request);
-    const data = await parseResponse<{ notes: Array<Record<string, unknown>> }>(
-      response
-    );
-
-    expect(response.status).toBe(200);
-    expect(data.notes[0].id).toBe("note-1");
-    expect("sessionId" in data.notes[0]).toBe(false);
-  });
-
   it("should filter by status when provided", async () => {
-    vi.mocked(storage.getNotesForModeration).mockResolvedValue([]);
-    vi.mocked(storage.getStats).mockResolvedValue({
-      total: 0,
-      pending: 0,
-      approved: 0,
-      rejected: 0,
-      flagged: 0,
-    });
+    await createNote(makeNote("pending-1"));
+    await createNote(makeNote("approved-1", { moderationStatus: "approved" }));
 
-    const request = createMockRequest(
-      "http://localhost:3000/api/admin/notes?status=pending"
-    );
+    const response = await getNotes("?status=pending");
+    const data = await parseResponse<AdminNotesResponse>(response);
 
-    await GET(request);
-    expect(storage.getNotesForModeration).toHaveBeenCalledWith("pending");
+    expect(data.notes.map((note) => note.id)).toEqual(["pending-1"]);
+    // Stats always cover the whole wall.
+    expect(data.stats.total).toBe(2);
   });
 
   it("should attach deduplicated report reasons to flagged notes", async () => {
-    vi.mocked(storage.getNotesForModeration).mockResolvedValue([
-      {
-        id: "flagged-note",
-        imageUrl: "https://example.com/flagged.png",
-        color: "yellow",
-        x: 100,
-        y: 200,
-        rotation: 0,
-        createdAt: "2024-01-01T00:00:00.000Z",
-        moderationStatus: "flagged",
-        flagCount: 3,
-      },
-      {
-        id: "clean-note",
-        imageUrl: "https://example.com/clean.png",
-        color: "blue",
-        x: 400,
-        y: 200,
-        rotation: 0,
-        createdAt: "2024-01-02T00:00:00.000Z",
-        moderationStatus: "approved",
-        flagCount: 0,
-      },
-    ]);
-    vi.mocked(storage.getStats).mockResolvedValue({
-      total: 2,
-      pending: 0,
-      approved: 1,
-      rejected: 0,
-      flagged: 1,
-    });
-    vi.mocked(storage.getFlagReasons).mockResolvedValue([
-      "Harassment or bullying",
+    await createNote(makeNote("flagged-note", { moderationStatus: "approved" }));
+    await createNote(makeNote("clean-note", { moderationStatus: "approved" }));
+    await flagNote("flagged-note", "reporter-1", "Harassment or bullying");
+    await flagNote("flagged-note", "reporter-2", "  Harassment or bullying ");
+    await flagNote("flagged-note", "reporter-3", "Spam or advertising");
+
+    const response = await getNotes();
+    const data = await parseResponse<AdminNotesResponse>(response);
+
+    expect(response.status).toBe(200);
+    const flagged = data.notes.find((note) => note.id === "flagged-note");
+    const clean = data.notes.find((note) => note.id === "clean-note");
+    expect(flagged?.moderationStatus).toBe("flagged");
+    expect(flagged?.reportReasons).toEqual([
       "Harassment or bullying",
       "Spam or advertising",
     ]);
-
-    const request = createMockRequest("http://localhost:3000/api/admin/notes");
-    const response = await GET(request);
-    const data = await parseResponse<{
-      notes: Array<{ id: string; reportReasons: string[] }>;
-    }>(response);
-
-    expect(response.status).toBe(200);
-    expect(data.notes[0].reportReasons).toEqual([
-      "Harassment or bullying",
-      "Spam or advertising",
-    ]);
-    expect(data.notes[1].reportReasons).toEqual([]);
-    expect(storage.getFlagReasons).toHaveBeenCalledTimes(1);
-    expect(storage.getFlagReasons).toHaveBeenCalledWith("flagged-note");
-  });
-
-  it("should still return notes when report reasons cannot be loaded", async () => {
-    vi.mocked(storage.getNotesForModeration).mockResolvedValue([
-      {
-        id: "flagged-note",
-        imageUrl: "https://example.com/flagged.png",
-        color: "yellow",
-        x: 100,
-        y: 200,
-        rotation: 0,
-        createdAt: "2024-01-01T00:00:00.000Z",
-        moderationStatus: "flagged",
-        flagCount: 2,
-      },
-    ]);
-    vi.mocked(storage.getStats).mockResolvedValue({
-      total: 1,
-      pending: 0,
-      approved: 0,
-      rejected: 0,
-      flagged: 1,
-    });
-    vi.mocked(storage.getFlagReasons).mockRejectedValue(
-      new Error("flag lookup failed")
-    );
-
-    const request = createMockRequest("http://localhost:3000/api/admin/notes");
-    const response = await GET(request);
-    const data = await parseResponse<{
-      notes: Array<{ id: string; reportReasons: string[] }>;
-    }>(response);
-
-    expect(response.status).toBe(200);
-    expect(data.notes[0].reportReasons).toEqual([]);
+    expect(clean?.reportReasons).toEqual([]);
   });
 
   it("should return 400 for invalid status", async () => {
-    const request = createMockRequest(
-      "http://localhost:3000/api/admin/notes?status=invalid"
-    );
-
-    const response = await GET(request);
-    const data = await parseResponse<{ error: string }>(response);
+    const response = await getNotes("?status=invalid");
+    const data = await parseResponse<AdminNotesResponse>(response);
 
     expect(response.status).toBe(400);
-    expect(data.error).toContain("Invalid moderation status");
+    expect(data.error).toBe("Invalid moderation status filter");
   });
 
-  it("should handle errors gracefully", async () => {
-    vi.mocked(storage.getNotesForModeration).mockRejectedValue(new Error("Database error"));
-    const request = createMockRequest("http://localhost:3000/api/admin/notes");
+  describe("with Convex", () => {
+    beforeEach(() => {
+      useConvex();
+    });
 
-    const response = await GET(request);
-    const data = await parseResponse<{ error: string }>(response);
+    it("should read notes, stats and report reasons via admin queries", async () => {
+      convexBackend
+        .on("notes:getNotesForModeration", () => [
+          makeConvexNote("flagged-note", { flagCount: 2, moderationStatus: "flagged" }),
+          makeConvexNote("clean-note"),
+        ])
+        .on("notes:getStats", () => ({ total: 2, pending: 1, approved: 0, rejected: 0, flagged: 1 }))
+        .on("notes:getFlagReasons", () => [
+          { reason: "Spam or advertising" },
+          { reason: "Spam or advertising" },
+          {},
+        ]);
 
-    expect(response.status).toBe(500);
-    expect(data.error).toBe("Failed to fetch notes");
+      const response = await getNotes("?status=flagged");
+      const data = await parseResponse<AdminNotesResponse>(response);
+
+      expect(response.status).toBe(200);
+      expect(convexBackend.callsTo("notes:getNotesForModeration")[0]).toMatchObject({
+        adminKey: "test-deploy-key",
+        args: { status: "flagged" },
+      });
+      // Reasons are only looked up for notes that have reports.
+      expect(convexBackend.callsTo("notes:getFlagReasons").map((c) => c.args)).toEqual([
+        { visibleId: "flagged-note" },
+      ]);
+      expect(data.notes[0].reportReasons).toEqual(["Spam or advertising"]);
+      expect(data.notes[1].reportReasons).toEqual([]);
+      expect("sessionId" in data.notes[0]).toBe(false);
+      expect(data.stats.flagged).toBe(1);
+    });
+
+    it("should still return notes when report reasons cannot be loaded", async () => {
+      convexBackend
+        .on("notes:getNotesForModeration", () => [makeConvexNote("flagged-note", { flagCount: 2 })])
+        .on("notes:getStats", () => ({ total: 1, pending: 0, approved: 0, rejected: 0, flagged: 1 }))
+        .on("notes:getFlagReasons", () => {
+          throw new Error("flag lookup failed");
+        });
+
+      const response = await getNotes();
+      const data = await parseResponse<AdminNotesResponse>(response);
+
+      expect(response.status).toBe(200);
+      expect(data.notes[0].reportReasons).toEqual([]);
+    });
+
+    it("should handle errors gracefully", async () => {
+      convexBackend.on("notes:getStats", () => ({ total: 0 }));
+      // notes:getNotesForModeration is unavailable.
+
+      const response = await getNotes();
+      const data = await parseResponse<AdminNotesResponse>(response);
+
+      expect(response.status).toBe(500);
+      expect(data.error).toBe("Failed to fetch notes");
+    });
+
+    it("should return 503 when Convex admin credentials are missing", async () => {
+      useConvex({ admin: false });
+
+      const response = await getNotes();
+
+      expect(response.status).toBe(503);
+    });
   });
 });

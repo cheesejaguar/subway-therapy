@@ -1,24 +1,17 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-
-const { mockHeadersFn } = vi.hoisted(() => ({
-  mockHeadersFn: vi.fn(),
-}));
-
-vi.mock("next/headers", () => ({
-  cookies: vi.fn(() => ({
-    get: vi.fn(),
-    set: vi.fn(),
-  })),
-  headers: mockHeadersFn,
-}));
-
-import { getReporterHashes, checkPostAttemptRateLimit, checkFlagRateLimit } from "./abuse";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { requestContext } from "@/test/fakes";
+import {
+  getReporterHashes,
+  checkPostAttemptRateLimit,
+  checkFlagRateLimit,
+  checkReactionRateLimit,
+  checkAdminLoginRateLimit,
+} from "./abuse";
 
 describe("abuse", () => {
   const ORIGINAL_ENV = process.env;
 
   beforeEach(() => {
-    vi.clearAllMocks();
     process.env = { ...ORIGINAL_ENV };
   });
 
@@ -27,8 +20,7 @@ describe("abuse", () => {
   });
 
   function mockHeaders(headerMap: Record<string, string> = {}) {
-    const mockHeadersObj = new Headers(headerMap);
-    mockHeadersFn.mockResolvedValue(mockHeadersObj);
+    requestContext.headers = new Headers(headerMap);
   }
 
   describe("getReporterHashes", () => {
@@ -72,14 +64,28 @@ describe("abuse", () => {
 
     it("should use x-real-ip when x-forwarded-for is not present", async () => {
       mockHeaders({ "x-real-ip": "5.6.7.8", "user-agent": "Test" });
-      const result = await getReporterHashes();
-      expect(result.dailyReporterHash).toBeTruthy();
+      const viaRealIp = await getReporterHashes();
+
+      mockHeaders({ "x-forwarded-for": "5.6.7.8", "user-agent": "Test" });
+      const viaForwardedFor = await getReporterHashes();
+
+      mockHeaders({ "x-real-ip": "9.9.9.9", "user-agent": "Test" });
+      const otherIp = await getReporterHashes();
+
+      expect(viaRealIp.dailyReporterHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(viaRealIp.dailyReporterHash).toBe(viaForwardedFor.dailyReporterHash);
+      expect(viaRealIp.dailyReporterHash).not.toBe(otherIp.dailyReporterHash);
     });
 
     it("should use 'unknown' when no IP headers are present", async () => {
       mockHeaders({ "user-agent": "Test" });
-      const result = await getReporterHashes();
-      expect(result.dailyReporterHash).toBeTruthy();
+      const noIp = await getReporterHashes();
+
+      mockHeaders({ "x-forwarded-for": "unknown", "user-agent": "Test" });
+      const literalUnknown = await getReporterHashes();
+
+      expect(noIp.dailyReporterHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(noIp.dailyReporterHash).toBe(literalUnknown.dailyReporterHash);
     });
 
     it("should use first IP from x-forwarded-for", async () => {
@@ -152,6 +158,39 @@ describe("abuse", () => {
       const result = await checkFlagRateLimit("s3");
       expect(result.allowed).toBe(false);
       expect(result.retryAfterMs).toBeGreaterThan(0);
+    });
+  });
+
+  describe("checkReactionRateLimit", () => {
+    it("should block the 21st reaction inside one minute", async () => {
+      for (let i = 0; i < 20; i++) {
+        mockHeaders({ "x-forwarded-for": "rate-react-1", "user-agent": "Test" });
+        expect((await checkReactionRateLimit("s4")).allowed).toBe(true);
+      }
+
+      mockHeaders({ "x-forwarded-for": "rate-react-1", "user-agent": "Test" });
+      const result = await checkReactionRateLimit("s4");
+      expect(result.allowed).toBe(false);
+      expect(result.retryAfterMs).toBeGreaterThan(0);
+      expect(result.retryAfterMs).toBeLessThanOrEqual(60 * 1000);
+    });
+  });
+
+  describe("checkAdminLoginRateLimit", () => {
+    it("should key admin logins by network only and block the 9th attempt", async () => {
+      for (let i = 0; i < 8; i++) {
+        // A rotating user agent must not reset the password-guessing budget.
+        mockHeaders({ "x-forwarded-for": "rate-admin-1", "user-agent": `Agent-${i}` });
+        expect((await checkAdminLoginRateLimit()).allowed).toBe(true);
+      }
+
+      mockHeaders({ "x-forwarded-for": "rate-admin-1", "user-agent": "Agent-final" });
+      const blocked = await checkAdminLoginRateLimit();
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.retryAfterMs).toBeLessThanOrEqual(15 * 60 * 1000);
+
+      mockHeaders({ "x-forwarded-for": "rate-admin-2", "user-agent": "Agent-final" });
+      expect((await checkAdminLoginRateLimit()).allowed).toBe(true);
     });
   });
 });

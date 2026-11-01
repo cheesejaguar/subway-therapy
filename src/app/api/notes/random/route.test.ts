@@ -1,14 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { GET } from "./route";
 import { parseResponse } from "@/test/api-helpers";
-import * as noteService from "@/lib/note-service";
-import type { PublicStickyNote } from "@/lib/types";
+import { convexBackend, useConvex } from "@/test/fakes";
+import { createNote } from "@/lib/storage";
+import type { PublicStickyNote, StickyNote } from "@/lib/types";
 
-vi.mock("@/lib/note-service", () => ({
-  getRandomWallNote: vi.fn(),
-}));
-
-const note: PublicStickyNote = {
+const publicNote: PublicStickyNote = {
   id: "note-0001",
   imageUrl: "",
   color: "pink",
@@ -21,25 +18,27 @@ const note: PublicStickyNote = {
   kind: "text",
   text: "You are not alone.",
 };
+const note: StickyNote = { ...publicNote, sessionId: "private-session" };
 
 describe("GET /api/notes/random", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("returns a random approved note without caching it", async () => {
-    vi.mocked(noteService.getRandomWallNote).mockResolvedValue(note);
+    await createNote(note);
+    await createNote({ ...note, id: "note-pending", moderationStatus: "pending" });
 
     const response = await GET();
     const data = await parseResponse<{ note: PublicStickyNote }>(response);
 
     expect(response.status).toBe(200);
-    expect(data.note).toEqual(note);
+    expect(data.note).toEqual(publicNote);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  it("returns 404 when the wall is empty", async () => {
-    vi.mocked(noteService.getRandomWallNote).mockResolvedValue(null);
+  it("returns 404 when the wall has no approved notes", async () => {
+    await createNote({ ...note, moderationStatus: "pending" });
 
     const response = await GET();
     const data = await parseResponse<{ note: null }>(response);
@@ -48,15 +47,16 @@ describe("GET /api/notes/random", () => {
     expect(data.note).toBeNull();
   });
 
-  it("returns 500 when the random lookup fails", async () => {
-    vi.mocked(noteService.getRandomWallNote).mockRejectedValue(
-      new Error("storage down")
-    );
+  it("returns 404 when the Convex lookup fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    useConvex({ admin: false });
+    convexBackend.on("notes:getRandomApprovedNote", () => {
+      throw new Error("storage down");
+    });
 
     const response = await GET();
-    const data = await parseResponse<{ error: string }>(response);
 
-    expect(response.status).toBe(500);
-    expect(data.error).toBe("Failed to fetch a random note");
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 });

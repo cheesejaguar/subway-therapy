@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { track } from "@vercel/analytics";
 import NoteActions from "./NoteActions";
 import type { PublicStickyNote } from "@/lib/types";
 
-vi.mock("@/lib/analytics", () => ({
-  trackEvent: vi.fn(),
-  vibrate: vi.fn(),
-  shareUrl: (path: string) => `https://subwaytherapy.net${path}`,
+// Vercel Analytics is a third-party beacon; the app's own analytics wrapper
+// (src/lib/analytics.ts) runs for real.
+vi.mock("@vercel/analytics", () => ({
+  track: vi.fn(),
 }));
 
 function makeNote(overrides: Partial<PublicStickyNote> = {}): PublicStickyNote {
@@ -31,6 +32,7 @@ function makeNote(overrides: Partial<PublicStickyNote> = {}): PublicStickyNote {
 describe("NoteActions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(track).mockReset();
   });
 
   afterEach(() => {
@@ -65,6 +67,11 @@ describe("NoteActions", () => {
     expect(
       screen.getByRole("button", { name: "Love this, 1" })
     ).toHaveAttribute("aria-pressed", "true");
+    expect(track).toHaveBeenCalledWith("reaction_added", {
+      noteId: "note-0001",
+      reaction: "heart",
+      duplicate: false,
+    });
   });
 
   it("sends the selected report reason", async () => {
@@ -86,6 +93,33 @@ describe("NoteActions", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Thanks. A moderator will review this note."
     );
+    expect(track).toHaveBeenCalledWith("note_reported", {
+      noteId: "note-0001",
+      reason: "Spam or advertising",
+    });
+  });
+
+  it("keeps working when analytics throws", async () => {
+    vi.mocked(track).mockImplementation(() => {
+      throw new Error("blocked by an ad blocker");
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          reactionCounts: { heart: 0, hug: 1, strength: 0, metoo: 0 },
+          reactionCount: 1,
+        }),
+      })
+    );
+
+    render(<NoteActions note={makeNote()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Send a hug" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Send a hug, 1" })).toBeDisabled();
+    });
   });
 
   it("shows an error when a reaction cannot be saved", async () => {
@@ -105,6 +139,7 @@ describe("NoteActions", () => {
         "Could not add that reaction. Try again."
       );
     });
+    expect(track).not.toHaveBeenCalled();
   });
 
   it("renders counts from the note", () => {

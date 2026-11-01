@@ -1,183 +1,166 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { POST } from "./route";
 import { createMockRequest, parseResponse } from "@/test/api-helpers";
-import * as storage from "@/lib/storage";
-import * as convex from "@/lib/convex";
-import * as abuse from "@/lib/abuse";
-import * as session from "@/lib/session";
+import { convexBackend, requestContext, useConvex } from "@/test/fakes";
+import { createNote, getFlagReasons, getNote } from "@/lib/storage";
+import { getReporterHash } from "@/lib/session";
+import type { StickyNote } from "@/lib/types";
 
-vi.mock("@/lib/storage", () => ({
-  flagNote: vi.fn(),
-  getNote: vi.fn(),
-}));
+function makeNote(overrides: Partial<StickyNote> = {}): StickyNote {
+  return {
+    id: "test-note-1",
+    imageUrl: "",
+    color: "yellow",
+    x: 0,
+    y: 0,
+    rotation: 0,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    moderationStatus: "approved",
+    flagCount: 0,
+    ...overrides,
+  };
+}
 
-vi.mock("@/lib/convex", () => ({
-  isConvexConfigured: vi.fn(),
-  isConvexAdminConfigured: vi.fn(),
-  getConvexAdminClient: vi.fn(),
-}));
+function flag(noteId: unknown) {
+  return POST(
+    createMockRequest("http://localhost:3000/api/notes/flag", {
+      method: "POST",
+      body: noteId === undefined ? {} : { noteId },
+    })
+  );
+}
 
-vi.mock("@/lib/abuse", () => ({
-  checkFlagRateLimit: vi.fn(),
-}));
+/** Switch to a different anonymous reporter (new network identity). */
+function asReporter(ip: string) {
+  requestContext.headers = new Headers({ "x-forwarded-for": ip, "user-agent": "Test" });
+}
 
-vi.mock("@/lib/session", () => ({
-  getReporterHash: vi.fn(),
-}));
+type FlagResponse = { success: boolean; message: string; flagCount: number; error?: string; retryAfterMs?: number };
 
 describe("POST /api/notes/flag", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(convex.isConvexConfigured).mockReturnValue(false);
-    vi.mocked(convex.isConvexAdminConfigured).mockReturnValue(false);
-    vi.mocked(session.getReporterHash).mockResolvedValue("reporter-hash");
-    vi.mocked(abuse.checkFlagRateLimit).mockResolvedValue({ allowed: true });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("should return 400 if noteId is missing", async () => {
-    const request = createMockRequest("http://localhost:3000/api/notes/flag", {
-      method: "POST",
-      body: {},
-    });
-
-    const response = await POST(request);
-    const data = await parseResponse<{ error: string }>(response);
+    const response = await flag(undefined);
+    const data = await parseResponse<FlagResponse>(response);
 
     expect(response.status).toBe(400);
     expect(data.error).toBe("Missing note ID");
   });
 
   it("should return 404 if note does not exist", async () => {
-    vi.mocked(storage.getNote).mockResolvedValue(null);
-
-    const request = createMockRequest("http://localhost:3000/api/notes/flag", {
-      method: "POST",
-      body: { noteId: "non-existent" },
-    });
-
-    const response = await POST(request);
-    const data = await parseResponse<{ error: string }>(response);
+    const response = await flag("non-existent");
+    const data = await parseResponse<FlagResponse>(response);
 
     expect(response.status).toBe(404);
     expect(data.error).toBe("Note not found");
   });
 
   it("should flag a note successfully", async () => {
-    vi.mocked(storage.getNote).mockResolvedValue({
-      id: "test-note",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "approved",
-      flagCount: 0,
-    });
-    vi.mocked(storage.flagNote).mockResolvedValue({
-      note: {
-        id: "test-note",
-        imageUrl: "",
-        color: "yellow",
-        x: 0,
-        y: 0,
-        rotation: 0,
-        createdAt: "",
-        moderationStatus: "approved",
-        flagCount: 1,
-      },
-      duplicate: false,
-    });
+    await createNote(makeNote());
 
-    const request = createMockRequest("http://localhost:3000/api/notes/flag", {
-      method: "POST",
-      body: { noteId: "test-note" },
-    });
-
-    const response = await POST(request);
-    const data = await parseResponse<{
-      success: boolean;
-      message: string;
-      flagCount: number;
-    }>(response);
+    const response = await flag("test-note-1");
+    const data = await parseResponse<FlagResponse>(response);
 
     expect(response.status).toBe(200);
     expect(data.success).toBe(true);
     expect(data.flagCount).toBe(1);
-    expect(data.message).toContain("Thank you for reporting");
-    expect(storage.flagNote).toHaveBeenCalledWith("test-note", "reporter-hash");
+    expect(data.message).toBe("Thank you for reporting. Our moderators will review this note.");
+    expect((await getNote("test-note-1"))?.flagCount).toBe(1);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
+    // The route does not forward a free-text reason.
+    expect(await getFlagReasons("test-note-1")).toEqual([]);
   });
 
-  it("should acknowledge duplicate reports from the same reporter", async () => {
-    vi.mocked(storage.getNote).mockResolvedValue({
-      id: "test-note",
-      imageUrl: "",
-      color: "yellow",
-      x: 0,
-      y: 0,
-      rotation: 0,
-      createdAt: "",
-      moderationStatus: "approved",
-      flagCount: 3,
-    });
-    vi.mocked(storage.flagNote).mockResolvedValue({
-      note: {
-        id: "test-note",
-        imageUrl: "",
-        color: "yellow",
-        x: 0,
-        y: 0,
-        rotation: 0,
-        createdAt: "",
-        moderationStatus: "flagged",
-        flagCount: 3,
-      },
-      duplicate: true,
-    });
+  it("should acknowledge duplicate reports from the same reporter without counting them", async () => {
+    await createNote(makeNote());
+    await flag("test-note-1");
 
-    const request = createMockRequest("http://localhost:3000/api/notes/flag", {
-      method: "POST",
-      body: { noteId: "test-note" },
-    });
-
-    const response = await POST(request);
-    const data = await parseResponse<{ success: boolean; message: string }>(response);
+    const response = await flag("test-note-1");
+    const data = await parseResponse<FlagResponse>(response);
 
     expect(response.status).toBe(200);
     expect(data.success).toBe(true);
     expect(data.message).toBe("You already reported this note.");
+    expect(data.flagCount).toBe(1);
+  });
+
+  it("should hide a note from the wall after three distinct reports", async () => {
+    await createNote(makeNote());
+
+    for (const ip of ["203.0.113.1", "203.0.113.2", "203.0.113.3"]) {
+      asReporter(ip);
+      expect((await flag("test-note-1")).status).toBe(200);
+    }
+
+    expect(await getNote("test-note-1")).toMatchObject({
+      flagCount: 3,
+      moderationStatus: "flagged",
+    });
   });
 
   it("should enforce report rate limit", async () => {
-    vi.mocked(abuse.checkFlagRateLimit).mockResolvedValue({
-      allowed: false,
-      retryAfterMs: 30_000,
-    });
+    for (let i = 0; i < 30; i++) {
+      await flag("missing-note-id");
+    }
 
-    const request = createMockRequest("http://localhost:3000/api/notes/flag", {
-      method: "POST",
-      body: { noteId: "test-note" },
-    });
-
-    const response = await POST(request);
-    const data = await parseResponse<{ error: string; retryAfterMs: number }>(response);
+    const response = await flag("test-note-1");
+    const data = await parseResponse<FlagResponse>(response);
 
     expect(response.status).toBe(429);
     expect(data.error).toContain("Too many reports");
-    expect(data.retryAfterMs).toBe(30_000);
+    expect(data.retryAfterMs).toBeGreaterThan(9 * 60 * 1000);
+    expect(data.retryAfterMs).toBeLessThanOrEqual(10 * 60 * 1000);
+  });
+
+  it("should flag through Convex with the reporter hash", async () => {
+    useConvex();
+    convexBackend.on("notes:flagNote", () => ({ flagCount: 2, duplicate: false }));
+
+    const response = await flag("test-note-1");
+    const data = await parseResponse<FlagResponse>(response);
+
+    expect(response.status).toBe(200);
+    expect(data.flagCount).toBe(2);
+    expect(convexBackend.callsTo("notes:flagNote")[0].args).toEqual({
+      visibleId: "test-note-1",
+      reporterHash: await getReporterHash(),
+    });
+  });
+
+  it("should return 404 when Convex does not know the note", async () => {
+    useConvex();
+    convexBackend.on("notes:flagNote", () => null);
+
+    const response = await flag("test-note-1");
+
+    expect(response.status).toBe(404);
+  });
+
+  it("should return 503 when Convex admin credentials are missing", async () => {
+    useConvex({ admin: false });
+
+    const response = await flag("test-note-1");
+    const data = await parseResponse<FlagResponse>(response);
+
+    expect(response.status).toBe(503);
+    expect(data.error).toContain("missing Convex admin credentials");
   });
 
   it("should handle errors gracefully", async () => {
-    vi.mocked(storage.getNote).mockRejectedValue(new Error("Database error"));
-
-    const request = createMockRequest("http://localhost:3000/api/notes/flag", {
-      method: "POST",
-      body: { noteId: "test-note" },
+    useConvex();
+    convexBackend.on("notes:flagNote", () => {
+      throw new Error("Database error");
     });
 
-    const response = await POST(request);
-    const data = await parseResponse<{ error: string }>(response);
+    const response = await flag("test-note-1");
+    const data = await parseResponse<FlagResponse>(response);
 
     expect(response.status).toBe(500);
     expect(data.error).toBe("Failed to flag note");

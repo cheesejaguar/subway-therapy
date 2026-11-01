@@ -1,46 +1,39 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { cookies } from "next/headers";
 import { GET } from "./route";
-import * as session from "@/lib/session";
+import { setRequestCookie } from "@/test/fakes";
+import { LAST_NOTE_COOKIE_NAME, SESSION_COOKIE_NAME } from "@/lib/types";
 
-// Mock the session module
-vi.mock("@/lib/session", () => ({
-  canUserPostNote: vi.fn(),
-  formatTimeRemaining: vi.fn((ms: number) => `${Math.floor(ms / 3600000)}h`),
-  getOrCreateSessionId: vi.fn(async () => "test-session"),
-  getSessionCookieConfig: vi.fn((sessionId: string) => ({
-    name: "session_id",
-    value: sessionId,
-    options: { httpOnly: true, path: "/" },
-  })),
-}));
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 describe("GET /api/session", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("should return canPost true when user can post", async () => {
-    vi.mocked(session.canUserPostNote).mockResolvedValue({
-      canPost: true,
-    });
-
+  it("should let a new visitor post and issue them a session cookie", async () => {
     const response = await GET();
     const data = await response.json();
 
     expect(response.status).toBe(200);
-    expect(data.canPost).toBe(true);
-    expect(data.reason).toBeUndefined();
-    expect(data.timeUntilNextPost).toBeUndefined();
+    expect(data).toEqual({ canPost: true });
+    expect(response.cookies.get(SESSION_COOKIE_NAME)?.value).toMatch(UUID_PATTERN);
     // Cookie-dependent responses must never be CDN-cached.
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  it("should return canPost false with reason when user cannot post", async () => {
-    vi.mocked(session.canUserPostNote).mockResolvedValue({
-      canPost: false,
-      reason: "Only one note per person per day!",
-      timeUntilNextPost: 3600000, // 1 hour
-    });
+  it("should keep an existing session id", async () => {
+    setRequestCookie(SESSION_COOKIE_NAME, "existing-session");
+
+    const response = await GET();
+
+    expect(response.cookies.get(SESSION_COOKIE_NAME)?.value).toBe("existing-session");
+  });
+
+  it("should return canPost false with a formatted wait when the visitor already posted", async () => {
+    // Posted 1h30m ago, so 22h30m remain.
+    const posted = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+    setRequestCookie(LAST_NOTE_COOKIE_NAME, posted);
 
     const response = await GET();
     const data = await response.json();
@@ -48,18 +41,17 @@ describe("GET /api/session", () => {
     expect(response.status).toBe(200);
     expect(data.canPost).toBe(false);
     expect(data.reason).toBe("Only one note per person per day!");
-    expect(data.timeUntilNextPost).toBe("1h");
+    expect(data.timeUntilNextPost).toMatch(/^22h (29|30)m$/);
   });
 
-  it("should return canPost true on error", async () => {
-    vi.mocked(session.canUserPostNote).mockRejectedValue(
-      new Error("Session error")
-    );
+  it("should fail open when the request scope is unavailable", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(cookies).mockRejectedValueOnce(new Error("cookies() outside request scope"));
 
     const response = await GET();
     const data = await response.json();
 
     expect(response.status).toBe(200);
-    expect(data.canPost).toBe(true);
+    expect(data).toEqual({ canPost: true });
   });
 });
